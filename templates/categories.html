@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Categorias - Sistema de Gamificação{% endblock %}
+
+{% block content %}
+<div class="categories-container">
+    <div class="categories-header">
+        <h1>Minhas Categorias</h1>
+        <button class="btn btn-primary" onclick="showAddCategoryModal()">
+            <i class="fas fa-plus"></i> Nova Categoria
+        </button>
+    </div>
+
+    <div class="categories-grid" id="categories-grid">
+        <!-- Categorias serão carregadas via JavaScript -->
+    </div>
+
+    <div class="category-usage">
+        <h2>Distribuição por Categoria</h2>
+        <div id="category-chart" class="chart-container">
+            <!-- Gráfico será gerado via JavaScript -->
+        </div>
+    </div>
+</div>
+
+<!-- Modal para adicionar/editar categoria -->
+<div id="category-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3 id="category-modal-title">Nova Categoria</h3>
+        <form id="category-form">
+            <input type="hidden" id="category-id">
+            
+            <div class="form-group">
+                <label for="category-name">Nome da Categoria:</label>
+                <input type="text" id="category-name" required placeholder="Ex: Leitura, Exercícios, Estudos...">
+            </div>
+            
+            <div class="form-group">
+                <label for="category-description">Descrição:</label>
+                <textarea id="category-description" placeholder="Descreva esta categoria..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="category-color">Cor:</label>
+                <input type="color" id="category-color" value="#3498db">
+            </div>
+            
+            <div class="form-group">
+                <label for="category-icon">Ícone:</label>
+                <select id="category-icon">
+                    <option value="📚">📚 Livros</option>
+                    <option value="🏃">🏃 Exercício</option>
+                    <option value="📖">📖 Estudo</option>
+                    <option value="🎵">🎵 Música</option>
+                    <option value="🎯">🎯 Projeto</option>
+                    <option value="🧠">🧠 Desenvolvimento</option>
+                    <option value="❤️">❤️ Saúde</option>
+                    <option value="🎮">🎮 Lazer</option>
+                    <option value="💰">💰 Finanças</option>
+                    <option value="🏠">🏠 Casa</option>
+                    <option value="🚗">🚗 Carro</option>
+                    <option value="💼">💼 Trabalho</option>
+                    <option value="⭐">⭐ Personalizado</option>
+                </select>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Salvar</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('category-modal')">Cancelar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Carregar categorias
+    loadCategories();
+</script>
+{% endblock %}

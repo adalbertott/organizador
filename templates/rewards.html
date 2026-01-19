@@ -1,0 +1,1306 @@
+{% extends "base.html" %}
+
+{% block title %}Recompensas - Sistema de Gamificação{% endblock %}
+
+{% block content %}
+<div class="rewards-container">
+    <div class="rewards-header">
+        <div class="points-section">
+            <div class="points-display">
+                <div class="points-card">
+                    <div class="points-icon">
+                        <i class="fas fa-trophy"></i>
+                    </div>
+                    <div class="points-info">
+                        <h3 id="total-points">0</h3>
+                        <p>Pontos Acumulados</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="streak-section">
+                <div class="streak-card">
+                    <div class="streak-icon">
+                        <i class="fas fa-fire"></i>
+                    </div>
+                    <div class="streak-info">
+                        <h3 id="current-streak">0</h3>
+                        <p>Semanas Consecutivas</p>
+                    </div>
+                </div>
+                <div class="streak-message" id="streak-message">
+                    Comece a confirmar atividades para aumentar sua sequência!
+                </div>
+            </div>
+        </div>
+        
+        <button class="btn btn-primary" onclick="showAddRewardModal()">
+            <i class="fas fa-gift"></i> Nova Recompensa
+        </button>
+    </div>
+
+    <div class="rewards-tabs">
+        <button class="tab-btn active" onclick="showRewardsTab('active')">Disponíveis</button>
+        <button class="tab-btn" onclick="showRewardsTab('achieved')">Resgatadas</button>
+        <button class="tab-btn" onclick="showRewardsTab('transactions')">Histórico</button>
+    </div>
+
+    <div class="rewards-grid" id="active-rewards">
+        <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p>Carregando recompensas...</p>
+        </div>
+    </div>
+
+    <div class="rewards-grid" id="achieved-rewards" style="display: none;">
+    </div>
+
+    <div class="transactions-container" id="transactions-list" style="display: none;">
+        <h3>Histórico de Pontos</h3>
+        <div class="transactions-list">
+        </div>
+    </div>
+
+    <div class="rewards-info">
+        <h3><i class="fas fa-info-circle"></i> Como funcionam as recompensas?</h3>
+        <div class="info-content">
+            <div class="info-item">
+                <div class="info-icon">
+                    <i class="fas fa-star"></i>
+                </div>
+                <div class="info-text">
+                    <h4>Acumule Pontos</h4>
+                    <p>Ganhe pontos ao registrar progresso nas suas atividades. Cada progresso te dá pontos baseados na porcentagem completada!</p>
+                </div>
+            </div>
+            
+            <div class="info-item">
+                <div class="info-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div class="info-text">
+                    <h4>Bônus por Conclusão</h4>
+                    <p>Complete atividades para ganhar bônus extras de pontos. Mantenha a consistência!</p>
+                </div>
+            </div>
+            
+            <div class="info-item">
+                <div class="info-icon">
+                    <i class="fas fa-fire"></i>
+                </div>
+                <div class="info-text">
+                    <h4>Sequência Semanal</h4>
+                    <p>Confirme atividades semanalmente para aumentar sua sequência e ganhar bônus progressivos!</p>
+                </div>
+            </div>
+            
+            <div class="info-item">
+                <div class="info-icon">
+                    <i class="fas fa-gift"></i>
+                </div>
+                <div class="info-text">
+                    <h4>Resgate Recompensas</h4>
+                    <p>Use seus pontos para resgatar recompensas personalizadas que você mesmo criou!</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="points-guide">
+            <h4>Como ganhar pontos:</h4>
+            <ul>
+                <li><strong>Progresso parcial:</strong> 1 ponto a cada 10% de progresso</li>
+                <li><strong>Conclusão de atividade:</strong> +5 pontos de bônus</li>
+                <li><strong>Sequência semanal:</strong> 
+                    <ul>
+                        <li>1ª semana: 1 ponto - "É um bom começo!"</li>
+                        <li>2ª semana: 2 pontos - "Você está indo bem!"</li>
+                        <li>3ª semana: 3 pontos - "Continue assim!"</li>
+                        <li>4ª semana: 4 pontos - "1 mês! Crescimento muito consistente!"</li>
+                        <li>5+ semanas: Pontos progressivos - "Ninguém para você, sai da frente!"</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para adicionar/editar recompensa -->
+<div id="reward-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3 id="reward-modal-title">Nova Recompensa</h3>
+        <form id="reward-form">
+            <input type="hidden" id="reward-id">
+            
+            <div class="form-group">
+                <label for="reward-name">Nome da Recompensa:</label>
+                <input type="text" id="reward-name" required placeholder="Ex: Massagem relaxante, Jantar especial...">
+            </div>
+            
+            <div class="form-group">
+                <label for="reward-description">Descrição:</label>
+                <textarea id="reward-description" placeholder="Descreva esta recompensa..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="reward-points">Pontos Necessários:</label>
+                <div class="input-with-suggestions">
+                    <input type="number" id="reward-points" min="1" required>
+                    <div class="points-suggestions">
+                        <small>Sugestões: 
+                            <span class="points-suggestion" onclick="setPoints(10)">10</span> | 
+                            <span class="points-suggestion" onclick="setPoints(25)">25</span> | 
+                            <span class="points-suggestion" onclick="setPoints(50)">50</span> | 
+                            <span class="points-suggestion" onclick="setPoints(100)">100</span>
+                        </small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Salvar Recompensa</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('reward-modal')">Cancelar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal de Confirmação de Resgate -->
+<div id="purchase-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3>Resgatar Recompensa</h3>
+        <div id="purchase-content">
+        </div>
+        <div class="form-actions">
+            <button id="confirm-purchase" class="btn btn-success">Confirmar Resgate</button>
+            <button type="button" class="btn btn-outline" onclick="closeModal('purchase-modal')">Cancelar</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block styles %}
+<style>
+.points-section {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+    margin-bottom: 2rem;
+}
+
+.points-display {
+    margin-bottom: 0;
+}
+
+.points-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 1.5rem;
+    border-radius: var(--border-radius);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: var(--box-shadow);
+    max-width: 300px;
+    min-width: 250px;
+}
+
+.points-icon {
+    font-size: 2.5rem;
+    opacity: 0.9;
+}
+
+.points-info h3 {
+    font-size: 2.5rem;
+    margin: 0;
+    font-weight: bold;
+}
+
+.points-info p {
+    margin: 0;
+    opacity: 0.9;
+}
+
+.streak-section {
+    margin-bottom: 0;
+}
+
+.streak-card {
+    background: linear-gradient(135deg, #ff6b6b, #ffa726);
+    color: white;
+    padding: 1.5rem;
+    border-radius: var(--border-radius);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: var(--box-shadow);
+    max-width: 300px;
+    min-width: 250px;
+}
+
+.streak-icon {
+    font-size: 2.5rem;
+    opacity: 0.9;
+}
+
+.streak-info h3 {
+    font-size: 2.5rem;
+    margin: 0;
+    font-weight: bold;
+}
+
+.streak-info p {
+    margin: 0;
+    opacity: 0.9;
+}
+
+.streak-message {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: var(--border-radius);
+    color: #856404;
+    font-weight: 500;
+    max-width: 300px;
+    text-align: center;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+
+.rewards-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.rewards-tabs {
+    display: flex;
+    gap: 0;
+    margin: 2rem 0;
+    border-bottom: 2px solid #e0e0e0;
+    background: white;
+    border-radius: var(--border-radius) var(--border-radius) 0 0;
+    padding: 0;
+    overflow-x: auto;
+}
+
+.tab-btn {
+    padding: 1rem 2rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--gray-color);
+    border-bottom: 3px solid transparent;
+    transition: var(--transition);
+    position: relative;
+    white-space: nowrap;
+    flex: 1;
+    text-align: center;
+}
+
+.tab-btn.active {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-color);
+    background-color: #f8f9fa;
+}
+
+.tab-btn:hover:not(.active) {
+    color: var(--dark-color);
+    background-color: #f8f9fa;
+}
+
+.rewards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.reward-card {
+    background: white;
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+    padding: 1.5rem;
+    border-left: 4px solid var(--warning-color);
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: fit-content;
+}
+
+.reward-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--warning-color), var(--primary-color));
+}
+
+.reward-card.achieved {
+    border-left-color: var(--secondary-color);
+    background: linear-gradient(135deg, #ffffff, #f8fff9);
+}
+
+.reward-card.achieved::before {
+    background: linear-gradient(90deg, var(--secondary-color), var(--primary-color));
+}
+
+.reward-card.can-purchase {
+    border-left-color: var(--secondary-color);
+    box-shadow: 0 0 0 2px rgba(46, 204, 113, 0.2);
+    animation: pulse-glow 2s infinite;
+}
+
+@keyframes pulse-glow {
+    0% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.4); }
+    70% { box-shadow: 0 0 0 10px rgba(46, 204, 113, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0); }
+}
+
+.reward-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+}
+
+.reward-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+    gap: 1rem;
+}
+
+.reward-header h3 {
+    margin: 0;
+    color: var(--dark-color);
+    font-size: 1.2rem;
+    flex: 1;
+}
+
+.reward-points {
+    background-color: var(--warning-color);
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.reward-card.achieved .reward-points {
+    background-color: var(--secondary-color);
+}
+
+.reward-card.can-purchase .reward-points {
+    background-color: var(--secondary-color);
+    animation: bounce 1s infinite;
+}
+
+@keyframes bounce {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+.reward-description {
+    margin: 1rem 0;
+    color: var(--gray-color);
+    line-height: 1.5;
+    flex: 1;
+}
+
+.points-progress {
+    margin: 1rem 0;
+}
+
+.points-progress .progress-bar {
+    height: 8px;
+    margin-bottom: 0.5rem;
+}
+
+.progress-text {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--dark-color);
+    text-align: center;
+    display: block;
+}
+
+.reward-actions {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.insufficient-points {
+    color: var(--accent-color);
+    font-size: 0.8rem;
+    text-align: center;
+    font-weight: 500;
+}
+
+.purchased-badge {
+    background: var(--secondary-color);
+    color: white;
+    padding: 0.75rem 1rem;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.transactions-container {
+    margin-top: 1.5rem;
+}
+
+.transactions-container h3 {
+    margin-bottom: 1rem;
+    color: var(--dark-color);
+}
+
+.transactions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.transaction-item {
+    background: white;
+    padding: 1rem 1.5rem;
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+    margin-bottom: 0.75rem;
+    border-left: 4px solid var(--primary-color);
+    transition: var(--transition);
+}
+
+.transaction-item:hover {
+    transform: translateX(5px);
+}
+
+.transaction-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.transaction-description {
+    font-weight: 500;
+    color: var(--dark-color);
+}
+
+.transaction-points {
+    font-weight: 600;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.9rem;
+}
+
+.transaction-points.positive {
+    background-color: #d4edda;
+    color: var(--secondary-color);
+}
+
+.transaction-points.negative {
+    background-color: #f8d7da;
+    color: var(--accent-color);
+}
+
+.transaction-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    color: var(--gray-color);
+}
+
+.transaction-activity {
+    background: #e9ecef;
+    padding: 0.2rem 0.5rem;
+    border-radius: 8px;
+    font-size: 0.75rem;
+}
+
+.rewards-info {
+    margin-top: 3rem;
+    padding: 2rem;
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+    border-radius: var(--border-radius);
+    border-left: 4px solid var(--primary-color);
+}
+
+.rewards-info h3 {
+    margin-bottom: 1.5rem;
+    color: var(--dark-color);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.info-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.info-item {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.info-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.info-text h4 {
+    margin: 0 0 0.5rem 0;
+    color: var(--dark-color);
+}
+
+.info-text p {
+    margin: 0;
+    color: var(--gray-color);
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.points-guide {
+    background: white;
+    padding: 1.5rem;
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+}
+
+.points-guide h4 {
+    margin-bottom: 1rem;
+    color: var(--dark-color);
+}
+
+.points-guide ul {
+    margin: 0;
+    padding-left: 1.5rem;
+}
+
+.points-guide li {
+    margin-bottom: 0.5rem;
+    color: var(--gray-color);
+}
+
+.points-guide ul ul {
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.points-guide ul ul li {
+    margin-bottom: 0.25rem;
+    font-size: 0.9rem;
+}
+
+.input-with-suggestions {
+    position: relative;
+}
+
+.points-suggestions {
+    margin-top: 0.5rem;
+}
+
+.points-suggestion {
+    color: var(--primary-color);
+    cursor: pointer;
+    font-weight: 500;
+    transition: var(--transition);
+}
+
+.points-suggestion:hover {
+    color: var(--dark-color);
+    text-decoration: underline;
+}
+
+.loading-state {
+    text-align: center;
+    padding: 3rem;
+    color: var(--gray-color);
+    grid-column: 1 / -1;
+}
+
+.loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.empty-state {
+    text-align: center;
+    padding: 3rem 2rem;
+    color: var(--gray-color);
+    grid-column: 1 / -1;
+}
+
+.empty-state i {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}
+
+.empty-state h3 {
+    margin-bottom: 0.5rem;
+    color: var(--dark-color);
+}
+
+.empty-state p {
+    margin-bottom: 1.5rem;
+}
+
+/* Responsividade */
+@media (max-width: 768px) {
+    .points-section {
+        flex-direction: column;
+    }
+    
+    .points-card, .streak-card {
+        max-width: none;
+    }
+    
+    .rewards-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .rewards-tabs {
+        flex-direction: column;
+    }
+    
+    .tab-btn {
+        text-align: left;
+        border-bottom: 1px solid #e0e0e0;
+        border-left: 3px solid transparent;
+    }
+    
+    .tab-btn.active {
+        border-left-color: var(--primary-color);
+        border-bottom-color: #e0e0e0;
+    }
+    
+    .rewards-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .info-content {
+        grid-template-columns: 1fr;
+    }
+    
+    .transaction-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    
+    .transaction-footer {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .reward-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    
+    .reward-points {
+        align-self: flex-start;
+    }
+    
+    .info-item {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .info-icon {
+        align-self: center;
+    }
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ==============================================
+// VARIÁVEIS GLOBAIS
+// ==============================================
+let userPoints = 0;
+let rewards = [];
+
+// ==============================================
+// FUNÇÕES GLOBAIS E DE MODAL
+// ==============================================
+
+// Funções de Modal
+function showModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+        modal.style.display = 'block';
+    }
+}
+
+function closeModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+// Fechar modal ao clicar fora
+window.onclick = function(event) {
+    const modals = document.getElementsByClassName('modal');
+    for (let modal of modals) {
+        if (event.target === modal) {
+            modal.style.display = 'none';
+        }
+    }
+}
+
+// Função de notificação
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        border-radius: 5px;
+        color: white;
+        z-index: 10000;
+        font-weight: 500;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    `;
+    
+    if (type === 'success') {
+        notification.style.background = '#28a745';
+    } else if (type === 'error') {
+        notification.style.background = '#dc3545';
+    } else if (type === 'warning') {
+        notification.style.background = '#ffc107';
+        notification.style.color = '#212529';
+    } else {
+        notification.style.background = '#17a2b8';
+    }
+    
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 4000);
+}
+
+// ==============================================
+// FUNÇÕES AUXILIARES
+// ==============================================
+
+// Função auxiliar para definir pontos rapidamente
+function setPoints(points) {
+    const pointsInput = document.getElementById('reward-points');
+    if (pointsInput) {
+        pointsInput.value = points;
+    }
+}
+
+// ==============================================
+// GESTÃO DE PONTOS E SEQUÊNCIA
+// ==============================================
+
+// Carregar pontos do usuário e sequência
+async function loadUserPoints() {
+    try {
+        const [pointsResponse, streakResponse] = await Promise.all([
+            fetch('/api/points'),
+            fetch('/api/streak')
+        ]);
+        
+        const pointsData = await pointsResponse.json();
+        const streakData = await streakResponse.json();
+        
+        userPoints = pointsData.total_points;
+        
+        const pointsElement = document.getElementById('total-points');
+        if (pointsElement) {
+            pointsElement.textContent = userPoints;
+        }
+        
+        const streakElement = document.getElementById('current-streak');
+        const messageElement = document.getElementById('streak-message');
+        
+        if (streakElement) {
+            streakElement.textContent = streakData.streak_count;
+        }
+        
+        if (messageElement) {
+            messageElement.textContent = streakData.message;
+            
+            // Adicionar animação para sequências altas
+            if (streakData.streak_count >= 4) {
+                messageElement.style.animation = 'pulse 2s infinite';
+            } else {
+                messageElement.style.animation = 'none';
+            }
+        }
+        
+        return userPoints;
+    } catch (error) {
+        console.error('Erro ao carregar pontos e sequência:', error);
+        userPoints = 0;
+        return 0;
+    }
+}
+
+// Carregar transações
+async function loadTransactions() {
+    try {
+        const response = await fetch('/api/points/transactions');
+        const transactions = await response.json();
+        
+        const transactionsList = document.querySelector('.transactions-list');
+        if (!transactionsList) return;
+        
+        transactionsList.innerHTML = '';
+        
+        if (transactions.length === 0) {
+            transactionsList.innerHTML = `
+                <div class="empty-state small">
+                    <i class="fas fa-receipt"></i>
+                    <h3>Nenhuma transação encontrada</h3>
+                    <p>Suas transações de pontos aparecerão aqui.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        transactions.forEach(transaction => {
+            const transactionElement = document.createElement('div');
+            transactionElement.className = 'transaction-item fade-in';
+            transactionElement.innerHTML = `
+                <div class="transaction-header">
+                    <span class="transaction-description">${transaction.description}</span>
+                    <span class="transaction-points ${transaction.points > 0 ? 'positive' : 'negative'}">
+                        ${transaction.points > 0 ? '+' : ''}${transaction.points} pts
+                    </span>
+                </div>
+                <div class="transaction-footer">
+                    <span>${new Date(transaction.created_at).toLocaleDateString('pt-BR')}</span>
+                    ${transaction.activity_name ? `
+                        <span class="transaction-activity">${transaction.activity_name}</span>
+                    ` : ''}
+                </div>
+            `;
+            transactionsList.appendChild(transactionElement);
+        });
+        
+    } catch (error) {
+        console.error('Erro ao carregar transações:', error);
+    }
+}
+
+// ==============================================
+// GESTÃO DE RECOMPENSAS
+// ==============================================
+
+// Carregar recompensas
+async function loadRewards() {
+    try {
+        // Primeiro carregar os pontos do usuário e sequência
+        await loadUserPoints();
+        
+        // Depois carregar as recompensas
+        const response = await fetch('/api/rewards');
+        rewards = await response.json();
+        
+        const activeRewardsGrid = document.getElementById('active-rewards');
+        const achievedRewardsGrid = document.getElementById('achieved-rewards');
+        
+        if (activeRewardsGrid) activeRewardsGrid.innerHTML = '';
+        if (achievedRewardsGrid) achievedRewardsGrid.innerHTML = '';
+        
+        if (rewards.length === 0) {
+            activeRewardsGrid.innerHTML = `
+                <div class="empty-state" style="grid-column: 1 / -1;">
+                    <i class="fas fa-gift"></i>
+                    <h3>Nenhuma recompensa encontrada</h3>
+                    <p>Crie sua primeira recompensa para começar!</p>
+                    <button class="btn btn-primary" onclick="showAddRewardModal()">Criar Recompensa</button>
+                </div>
+            `;
+            return;
+        }
+        
+        rewards.forEach(reward => {
+            const rewardElement = createRewardElement(reward);
+            
+            if (reward.achieved) {
+                if (achievedRewardsGrid) achievedRewardsGrid.appendChild(rewardElement);
+            } else {
+                if (activeRewardsGrid) activeRewardsGrid.appendChild(rewardElement);
+            }
+        });
+        
+    } catch (error) {
+        console.error('Erro ao carregar recompensas:', error);
+        showNotification('Erro ao carregar recompensas', 'error');
+    }
+}
+
+// Criar elemento de recompensa
+function createRewardElement(reward) {
+    const element = document.createElement('div');
+    
+    // Verificar se o usuário pode comprar esta recompensa
+    const canPurchase = !reward.achieved && userPoints >= reward.points_required;
+    const elementClass = `reward-card ${reward.achieved ? 'achieved' : ''} ${canPurchase ? 'can-purchase' : ''} fade-in`;
+    
+    element.className = elementClass;
+    element.innerHTML = `
+        <div class="reward-header">
+            <h3>${reward.name}</h3>
+            <span class="reward-points">${reward.points_required} pts</span>
+        </div>
+        
+        ${reward.description ? `<p class="reward-description">${reward.description}</p>` : ''}
+        
+        ${!reward.achieved ? `
+            <div class="points-progress">
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${Math.min((userPoints / reward.points_required) * 100, 100)}%"></div>
+                </div>
+                <span class="progress-text">${userPoints}/${reward.points_required} pontos</span>
+            </div>
+        ` : `
+            <div class="reward-date">
+                <small>Resgatada em: ${new Date(reward.achieved_at).toLocaleDateString('pt-BR')}</small>
+            </div>
+        `}
+        
+        <div class="reward-actions">
+            ${!reward.achieved ? `
+                ${canPurchase ? `
+                    <button class="btn btn-success" onclick="showPurchaseConfirmation(${reward.id})">
+                        <i class="fas fa-shopping-cart"></i> Resgatar
+                    </button>
+                ` : `
+                    <div class="insufficient-points">
+                        <i class="fas fa-lock"></i> Pontos insuficientes
+                    </div>
+                `}
+                <div class="action-buttons-small">
+                    <button class="btn btn-outline btn-sm" onclick="editReward(${reward.id})">
+                        <i class="fas fa-edit"></i> Editar
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteReward(${reward.id})">
+                        <i class="fas fa-trash"></i> Excluir
+                    </button>
+                </div>
+            ` : `
+                <div class="purchased-badge">
+                    <i class="fas fa-check"></i> Resgatada
+                </div>
+                <button class="btn btn-outline btn-sm" onclick="markRewardUnachieved(${reward.id})">
+                    <i class="fas fa-undo"></i> Reativar
+                </button>
+            `}
+        </div>
+    `;
+    return element;
+}
+
+// Mostrar confirmação de compra
+async function showPurchaseConfirmation(rewardId) {
+    const reward = rewards.find(r => r.id === rewardId);
+    if (!reward) return;
+    
+    const purchaseContent = document.getElementById('purchase-content');
+    const confirmButton = document.getElementById('confirm-purchase');
+    
+    if (purchaseContent && confirmButton) {
+        purchaseContent.innerHTML = `
+            <div class="purchase-info">
+                <h4>${reward.name}</h4>
+                <p>${reward.description || ''}</p>
+                <div class="purchase-details">
+                    <div class="detail-item">
+                        <strong>Pontos necessários:</strong> ${reward.points_required}
+                    </div>
+                    <div class="detail-item">
+                        <strong>Seus pontos:</strong> ${userPoints}
+                    </div>
+                    <div class="detail-item">
+                        <strong>Pontos restantes:</strong> ${userPoints - reward.points_required}
+                    </div>
+                </div>
+                <p class="purchase-warning">Esta ação não pode ser desfeita.</p>
+            </div>
+        `;
+        
+        // Configurar o botão de confirmação
+        confirmButton.onclick = function() {
+            purchaseReward(rewardId);
+        };
+        
+        showModal('purchase-modal');
+    }
+}
+
+// Resgatar recompensa
+async function purchaseReward(rewardId) {
+    try {
+        const response = await fetch(`/api/rewards/${rewardId}/purchase`, {
+            method: 'POST'
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            showNotification(result.message, 'success');
+            closeModal('purchase-modal');
+            
+            // Recarregar dados
+            await loadRewards();
+            await loadUserPoints();
+            await loadTransactions();
+        } else {
+            const error = await response.json();
+            showNotification(error.message, 'error');
+        }
+    } catch (error) {
+        console.error('Erro ao resgatar recompensa:', error);
+        showNotification('Erro ao resgatar recompensa', 'error');
+    }
+}
+
+// Mostrar/editar recompensa
+function showAddRewardModal() {
+    const modalTitle = document.getElementById('reward-modal-title');
+    const rewardForm = document.getElementById('reward-form');
+    const rewardId = document.getElementById('reward-id');
+    
+    if (modalTitle && rewardForm && rewardId) {
+        modalTitle.textContent = 'Nova Recompensa';
+        rewardForm.reset();
+        rewardId.value = '';
+        showModal('reward-modal');
+    }
+}
+
+async function editReward(rewardId) {
+    const reward = rewards.find(r => r.id === rewardId);
+    if (!reward) return;
+    
+    const modalTitle = document.getElementById('reward-modal-title');
+    const rewardIdInput = document.getElementById('reward-id');
+    const rewardName = document.getElementById('reward-name');
+    const rewardDescription = document.getElementById('reward-description');
+    const rewardPoints = document.getElementById('reward-points');
+    
+    if (modalTitle && rewardIdInput && rewardName && rewardDescription && rewardPoints) {
+        modalTitle.textContent = 'Editar Recompensa';
+        rewardIdInput.value = reward.id;
+        rewardName.value = reward.name;
+        rewardDescription.value = reward.description || '';
+        rewardPoints.value = reward.points_required;
+        
+        showModal('reward-modal');
+    }
+}
+
+// Funções para marcar recompensas como conquistadas/não conquistadas
+async function markRewardAchieved(rewardId) {
+    try {
+        const response = await fetch(`/api/rewards/${rewardId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ achieved: true })
+        });
+        
+        if (response.ok) {
+            loadRewards();
+            showNotification('🎉 Recompensa conquistada! Parabéns!', 'success');
+        }
+    } catch (error) {
+        console.error('Erro ao atualizar recompensa:', error);
+        showNotification('Erro ao atualizar recompensa', 'error');
+    }
+}
+
+async function markRewardUnachieved(rewardId) {
+    try {
+        const response = await fetch(`/api/rewards/${rewardId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ achieved: false })
+        });
+        
+        if (response.ok) {
+            loadRewards();
+            showNotification('Recompensa reativada com sucesso!', 'success');
+        }
+    } catch (error) {
+        console.error('Erro ao atualizar recompensa:', error);
+        showNotification('Erro ao atualizar recompensa', 'error');
+    }
+}
+
+// Excluir recompensa
+async function deleteReward(rewardId) {
+    if (!confirm('Tem certeza que deseja excluir esta recompensa?')) return;
+    
+    try {
+        const response = await fetch(`/api/rewards/${rewardId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            loadRewards();
+            showNotification('Recompensa excluída com sucesso!', 'success');
+        }
+    } catch (error) {
+        console.error('Erro ao excluir recompensa:', error);
+        showNotification('Erro ao excluir recompensa', 'error');
+    }
+}
+
+// Alternar entre abas
+function showRewardsTab(tab) {
+    // Atualizar botões de aba
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    event.target.classList.add('active');
+    
+    // Esconder todos os conteúdos
+    document.querySelectorAll('.rewards-grid').forEach(grid => grid.style.display = 'none');
+    const transactionsList = document.getElementById('transactions-list');
+    if (transactionsList) transactionsList.style.display = 'none';
+    
+    // Mostrar conteúdo da aba selecionada
+    switch (tab) {
+        case 'active':
+            document.getElementById('active-rewards').style.display = 'grid';
+            break;
+        case 'achieved':
+            document.getElementById('achieved-rewards').style.display = 'grid';
+            break;
+        case 'transactions':
+            document.getElementById('transactions-list').style.display = 'block';
+            loadTransactions();
+            break;
+    }
+}
+
+// ==============================================
+// INICIALIZAÇÃO
+// ==============================================
+
+// Inicializar quando a página carregar
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Página de recompensas carregada');
+    
+    // Carregar dados iniciais
+    loadRewards();
+    
+    // Configurar fechamento de modais
+    document.querySelectorAll('.modal .close').forEach(closeBtn => {
+        closeBtn.addEventListener('click', function() {
+            this.closest('.modal').style.display = 'none';
+        });
+    });
+    
+    // Configurar formulário de recompensa
+    const rewardForm = document.getElementById('reward-form');
+    if (rewardForm) {
+        rewardForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = {
+                name: document.getElementById('reward-name').value,
+                description: document.getElementById('reward-description').value,
+                points_required: parseInt(document.getElementById('reward-points').value)
+            };
+            
+            const rewardId = document.getElementById('reward-id').value;
+            
+            try {
+                const url = rewardId ? `/api/rewards/${rewardId}` : '/api/rewards';
+                const method = rewardId ? 'PUT' : 'POST';
+                
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (response.ok) {
+                    closeModal('reward-modal');
+                    loadRewards();
+                    showNotification(
+                        rewardId ? 'Recompensa atualizada com sucesso!' : 'Recompensa criada com sucesso!',
+                        'success'
+                    );
+                } else {
+                    const errorData = await response.json();
+                    showNotification(errorData.message || 'Erro ao salvar recompensa', 'error');
+                }
+            } catch (error) {
+                console.error('Erro ao salvar recompensa:', error);
+                showNotification('Erro ao salvar recompensa', 'error');
+            }
+        });
+    }
+    
+    console.log('Sistema de recompensas inicializado');
+});
+</script>
+{% endblock %}
