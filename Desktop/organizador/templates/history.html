@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}Histórico - Sistema de Gamificação{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="header-content">
+        <h1><i class="fas fa-history"></i> Histórico de Atividades</h1>
+        <p>Registro completo de todas as atividades realizadas e progressos registrados</p>
+    </div>
+    <div class="header-actions">
+        <button class="btn btn-outline" onclick="exportHistory()">
+            <i class="fas fa-download"></i> Exportar
+        </button>
+        <button class="btn btn-primary" onclick="refreshHistory()">
+            <i class="fas fa-sync"></i> Atualizar
+        </button>
+    </div>
+</div>
+
+<div class="history-container">
+    <!-- Filtros -->
+    <div class="history-filters card">
+        <div class="card-header">
+            <h3><i class="fas fa-filter"></i> Filtros</h3>
+        </div>
+        <div class="card-body">
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label for="date-range">Período:</label>
+                    <select id="date-range" class="form-control" onchange="updateDateRange()">
+                        <option value="7">Últimos 7 dias</option>
+                        <option value="30" selected>Últimos 30 dias</option>
+                        <option value="90">Últimos 3 meses</option>
+                        <option value="365">Último ano</option>
+                        <option value="custom">Personalizado</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group" id="custom-date-range" style="display: none;">
+                    <label for="start-date">De:</label>
+                    <input type="date" id="start-date" class="form-control">
+                    <label for="end-date">Até:</label>
+                    <input type="date" id="end-date" class="form-control">
+                    <button class="btn btn-outline" onclick="applyCustomDateRange()">Aplicar</button>
+                </div>
+                
+                <div class="filter-group">
+                    <label for="category-filter">Categoria:</label>
+                    <select id="category-filter" class="form-control" onchange="filterHistory()">
+                        <option value="all">Todas as categorias</option>
+                        <!-- Categorias serão carregadas via JS -->
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label for="type-filter">Tipo de registro:</label>
+                    <select id="type-filter" class="form-control" onchange="filterHistory()">
+                        <option value="all">Todos os tipos</option>
+                        <option value="progress">Progresso parcial</option>
+                        <option value="completion">Conclusão</option>
+                        <option value="schedule">Agendamento</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="filter-row">
+                <button class="btn btn-outline" onclick="resetFilters()">
+                    <i class="fas fa-times"></i> Limpar filtros
+                </button>
+                <button class="btn btn-primary" onclick="applyFilters()">
+                    <i class="fas fa-search"></i> Aplicar filtros
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Estatísticas -->
+    <div class="history-stats">
+        <div class="stat-card">
+            <div class="stat-icon" style="background-color: #4CAF50;">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <div class="stat-content">
+                <h3 id="total-activities">0</h3>
+                <p>Atividades realizadas</p>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background-color: #2196F3;">
+                <i class="fas fa-chart-line"></i>
+            </div>
+            <div class="stat-content">
+                <h3 id="total-points">0</h3>
+                <p>Pontos acumulados</p>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background-color: #FF9800;">
+                <i class="fas fa-clock"></i>
+            </div>
+            <div class="stat-content">
+                <h3 id="total-hours">0</h3>
+                <p>Horas investidas</p>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background-color: #9C27B0;">
+                <i class="fas fa-calendar-check"></i>
+            </div>
+            <div class="stat-content">
+                <h3 id="streak-days">0</h3>
+                <p>Dias de sequência</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Linha do tempo do histórico -->
+    <div class="timeline-container card">
+        <div class="card-header">
+            <h3><i class="fas fa-stream"></i> Linha do Tempo</h3>
+            <div class="view-controls">
+                <button class="btn btn-outline btn-sm" onclick="toggleTimelineView('list')">
+                    <i class="fas fa-list"></i> Lista
+                </button>
+                <button class="btn btn-outline btn-sm active" onclick="toggleTimelineView('timeline')">
+                    <i class="fas fa-stream"></i> Timeline
+                </button>
+                <button class="btn btn-outline btn-sm" onclick="toggleTimelineView('calendar')">
+                    <i class="fas fa-calendar-alt"></i> Calendário
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="history-timeline">
+                <!-- Timeline será carregada via JS -->
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <p>Carregando histórico...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Lista detalhada -->
+    <div class="history-list card">
+        <div class="card-header">
+            <h3><i class="fas fa-list-ul"></i> Registros Detalhados</h3>
+            <div class="pagination-controls">
+                <span id="pagination-info">Mostrando 0 de 0 registros</span>
+                <button class="btn btn-outline btn-sm" onclick="prevPage()" id="prev-btn" disabled>
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <button class="btn btn-outline btn-sm" onclick="nextPage()" id="next-btn" disabled>
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Data</th>
+                            <th>Atividade</th>
+                            <th>Categoria</th>
+                            <th>Progresso</th>
+                            <th>Pontos</th>
+                            <th>Tempo</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table-body">
+                        <!-- Conteúdo será carregado via JS -->
+                        <tr>
+                            <td colspan="7" class="loading-cell">
+                                <div class="spinner small"></div>
+                                Carregando registros...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal de detalhes do registro -->
+<div id="history-detail-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="detail-modal-title">Detalhes do Registro</h2>
+            <span class="close" onclick="closeModal('history-detail-modal')">&times;</span>
+        </div>
+        <div class="modal-body" id="history-detail-content">
+            <!-- Conteúdo será carregado via JS -->
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeModal('history-detail-modal')">Fechar</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/history.js') }}"></script>
+{% endblock %}

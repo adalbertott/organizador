@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Sistema de Gamificação{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="dashboard-header">
+        <h1>Meu Progresso</h1>
+        <div class="date-display" id="current-date"></div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon">
+                <i class="fas fa-tasks"></i>
+            </div>
+            <div class="stat-info">
+                <h3 id="total-activities">0</h3>
+                <p>Total de Atividades</p>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon completed">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <div class="stat-info">
+                <h3 id="completed-activities">0</h3>
+                <p>Concluídas</p>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon categories">
+                <i class="fas fa-folder"></i>
+            </div>
+            <div class="stat-info">
+                <h3 id="total-categories">0</h3>
+                <p>Categorias</p>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon week">
+                <i class="fas fa-calendar-week"></i>
+            </div>
+            <div class="stat-info">
+                <h3 id="week-progress">0</h3>
+                <p>Progresso Semanal</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-content">
+        <div class="recent-activities">
+            <h2>Atividades Recentes</h2>
+            <div id="activities-list" class="activities-list">
+                <!-- Lista de atividades será carregada via JavaScript -->
+            </div>
+        </div>
+
+        <div class="quick-actions">
+            <h2>Ações Rápidas</h2>
+            <div class="action-buttons">
+                <button class="btn btn-primary" onclick="showAddActivityModal()">
+                    <i class="fas fa-plus"></i> Nova Atividade
+                </button>
+                <button class="btn btn-secondary" onclick="showAddCategoryModal()">
+                    <i class="fas fa-folder-plus"></i> Nova Categoria
+                </button>
+                <button class="btn btn-success" onclick="showLogProgressModal()">
+                    <i class="fas fa-chart-line"></i> Registrar Progresso
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para Adicionar Atividade -->
+<div id="activity-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3 id="activity-modal-title">Nova Atividade</h3>
+        <form id="activity-form">
+            <input type="hidden" id="activity-id" value="">
+            
+            <div class="form-group">
+                <label for="activity-name">Nome da Atividade:</label>
+                <input type="text" id="activity-name" required placeholder="Ex: Ler Dom Casmurro">
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-description">Descrição:</label>
+                <textarea id="activity-description" placeholder="Descreva esta atividade..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-category">Categoria:</label>
+                <select id="activity-category" required>
+                    <option value="">Selecione uma categoria</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-measurement-type">Tipo de Medição:</label>
+                <select id="activity-measurement-type" class="form-control" onchange="toggleMeasurementFields()">
+                    <option value="percentage">Porcentagem Direta</option>
+                    <option value="units">Unidades/Quantidade</option>
+                    <option value="boolean">Simples (Feito/Não Feito)</option>
+                </select>
+            </div>
+
+            <!-- Grupo para unidades (mostrado apenas quando tipo = 'units') -->
+            <div id="units-group" style="display: none;">
+                <div class="form-row" style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+                    <div style="flex: 1;">
+                        <label for="activity-target">Valor Alvo:</label>
+                        <input type="number" id="activity-target" class="form-control" min="0" step="0.01" placeholder="Ex: 100">
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="activity-unit">Unidade:</label>
+                        <input type="text" id="activity-unit" class="form-control" placeholder="Ex: páginas, flexões, minutos">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Grupo para porcentagem (mostrado apenas quando tipo = 'percentage') -->
+            <div id="percentage-group" style="display: none;">
+                <div class="form-group">
+                    <label for="activity-percentage">Porcentagem Concluída:</label>
+                    <div class="range-container" style="display: flex; align-items: center; gap: 1rem;">
+                        <input type="range" id="activity-percentage" class="form-control-range" min="0" max="100" step="1" value="0" style="flex: 1;">
+                        <span id="percentage-value" style="min-width: 40px;">0%</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-status">Status:</label>
+                <select id="activity-status">
+                    <option value="want_to_do">Quero Fazer</option>
+                    <option value="in_progress">Em Andamento</option>
+                    <option value="completed">Concluído</option>
+                </select>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Salvar</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('activity-modal')">Cancelar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal para Registrar Progresso -->
+<div id="progress-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3>Registrar Progresso</h3>
+        <form id="progress-form">
+            <div class="form-group">
+                <label for="progress-activity">Atividade:</label>
+                <select id="progress-activity" required>
+                    <option value="">Selecione uma atividade</option>
+                </select>
+            </div>
+            
+            <!-- Grupo para unidades (mostrado apenas quando tipo = 'units') -->
+            <div id="units-group-progress" style="display: none;">
+                <div class="form-group">
+                    <label for="progress-value">Valor do Progresso:</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="number" id="progress-value" step="0.1" placeholder="Ex: 10" style="flex: 1;">
+                        <span id="progress-unit" style="min-width: 80px;">unidades</span>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="checkbox" id="progress-completed">
+                        <span>Marcar como completado</span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Grupo para porcentagem (mostrado apenas quando tipo = 'percentage') -->
+            <div id="percentage-group-progress" style="display: none;">
+                <div class="form-group">
+                    <label for="progress-percentage">Porcentagem Concluída:</label>
+                    <div class="range-container" style="display: flex; align-items: center; gap: 1rem;">
+                        <input type="range" id="progress-percentage" class="form-control-range" min="0" max="100" step="1" value="0" style="flex: 1;">
+                        <span id="percentage-value-progress" style="min-width: 40px;">0%</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Grupo para boolean (mostrado apenas quando tipo = 'boolean') -->
+            <div id="boolean-group-progress" style="display: none;">
+                <div class="form-group">
+                    <div class="completion-info" style="padding: 1rem; background: #e8f5e8; border-radius: 8px; display: flex; align-items: center; gap: 1rem;">
+                        <i class="fas fa-check-circle" style="color: #2ecc71; font-size: 1.2rem;"></i>
+                        <span>A atividade será marcada como 100% completa</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="progress-date">Data:</label>
+                <input type="date" id="progress-date" value="{{ now().strftime('%Y-%m-%d') }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="progress-notes">Observações:</label>
+                <textarea id="progress-notes" placeholder="Observações sobre o progresso..."></textarea>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Registrar</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('progress-modal')">Cancelar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal para Adicionar Categoria -->
+<div id="category-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3 id="category-modal-title">Nova Categoria</h3>
+        <form id="category-form">
+            <input type="hidden" id="category-id" value="">
+            
+            <div class="form-group">
+                <label for="category-name">Nome da Categoria:</label>
+                <input type="text" id="category-name" required placeholder="Ex: Estudos">
+            </div>
+            
+            <div class="form-group">
+                <label for="category-description">Descrição:</label>
+                <textarea id="category-description" placeholder="Descreva esta categoria..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="category-color">Cor:</label>
+                <input type="color" id="category-color" value="#3498db">
+            </div>
+            
+            <div class="form-group">
+                <label for="category-icon">Ícone:</label>
+                <input type="text" id="category-icon" value="📚" placeholder="Emoji ou código de ícone">
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Salvar</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('category-modal')">Cancelar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+<!-- dashboard.html - Atualizar a seção de scripts -->
+<!-- dashboard.html - Atualizar a seção de scripts -->
+{% block scripts %}
+<script>
+    // Executar quando a página estiver completamente carregada
+    window.addEventListener('load', async function() {
+        // Atualizar data atual
+        document.getElementById('current-date').textContent = new Date().toLocaleDateString('pt-BR');
+        
+        // Carregar dados do dashboard
+        await loadDashboardStats();
+        await loadRecentActivities();
+        
+        // Configurar modais
+        setupActivityModal();
+        setupProgressModal();
+        
+        // Configurar slider de porcentagem no modal de atividade
+        const activityPercentageSlider = document.getElementById('activity-percentage');
+        const activityPercentageValue = document.getElementById('percentage-value');
+        
+        if (activityPercentageSlider && activityPercentageValue) {
+            activityPercentageSlider.addEventListener('input', function() {
+                activityPercentageValue.textContent = this.value + '%';
+            });
+        }
+        
+        // Configurar slider de porcentagem no modal de progresso
+        const progressPercentageSlider = document.getElementById('progress-percentage');
+        const progressPercentageValue = document.getElementById('percentage-value-progress');
+        
+        if (progressPercentageSlider && progressPercentageValue) {
+            progressPercentageSlider.addEventListener('input', function() {
+                progressPercentageValue.textContent = this.value + '%';
+            });
+        }
+        
+        // Fallback: garantir que as atividades sejam carregadas
+        setTimeout(async () => {
+            if (activities.length === 0) {
+                await loadRecentActivities();
+            }
+        }, 500);
+    });
+</script>
+{% endblock %}
