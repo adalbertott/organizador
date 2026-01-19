@@ -1,0 +1,259 @@
+[file name]: activity_map.html
+[file content begin]
+{% extends "base.html" %}
+
+{% block title %}Mapa de Atividades - Sistema de Gamificação{% endblock %}
+
+{% block extra_head %}
+<!-- Carregar Vis.js no head para garantir disponibilidade -->
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="activity-map-container">
+    <div class="activity-map-header">
+        <h1>Mapa de Atividades</h1>
+        <button class="btn btn-primary" onclick="showAddActivityMapModal()">
+            <i class="fas fa-plus"></i> Nova Atividade
+        </button>
+    </div>
+
+    <div class="activity-map-view">
+        <div class="view-controls">
+            <button class="btn btn-outline active" onclick="showActivityView('flowchart')">
+                <i class="fas fa-project-diagram"></i> Fluxograma
+            </button>
+            <button class="btn btn-outline" onclick="showActivityView('categories')">
+                <i class="fas fa-folder"></i> Por Categoria
+            </button>
+        </div>
+    <!-- Adicione esta seção após o view-controls -->
+    <div class="view-instructions">
+        <small>
+            <i class="fas fa-info-circle"></i>
+            Use o scroll para zoom, arraste para mover. 
+            Duplo clique em um nó para focar. 
+            Teclas: +/- para zoom, 0 para ajustar.
+        </small>
+    </div>    
+        <div id="flowchart-view" class="activity-view-content">
+            <div class="flowchart-container" id="flowchart-container">
+                <!-- Fluxograma será gerado via JavaScript -->
+            </div>
+        </div>
+
+        <div id="categories-view" class="activity-view-content" style="display: none;">
+            <div class="categories-activity-grid" id="categories-activity-grid">
+                <!-- Atividades por categoria serão carregadas via JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para adicionar/editar atividade -->
+<div id="activity-map-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3 id="activity-map-modal-title">Nova Atividade</h3>
+        <form id="activity-map-form">
+            <input type="hidden" id="activity-map-id">
+            
+            <div class="form-group">
+                <label for="activity-map-name">Nome da Atividade:</label>
+                <input type="text" id="activity-map-name" required placeholder="Ex: Ler Dom Casmurro, Estudar Python...">
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-map-description">Descrição:</label>
+                <textarea id="activity-map-description" placeholder="Descreva esta atividade..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-map-category">Categoria:</label>
+                <select id="activity-map-category" required>
+                    <option value="">Selecione uma categoria</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-map-parent">Atividade Pai (opcional):</label>
+                <select id="activity-map-parent">
+                    <option value="">Nenhuma (Atividade Principal)</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-map-status">Status:</label>
+                <select id="activity-map-status">
+                    <option value="want_to_do">Quero Fazer</option>
+                    <option value="in_progress">Em Andamento</option>
+                    <option value="completed">Concluído</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="activity-map-target">Meta (opcional):</label>
+                <div class="target-input-group">
+                    <input type="number" id="activity-map-target" placeholder="Ex: 100">
+                    <select id="activity-map-unit">
+                        <option value="páginas">páginas</option>
+                        <option value="minutos">minutos</option>
+                        <option value="horas">horas</option>
+                        <option value="km">km</option>
+                        <option value="unidades">unidades</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Salvar</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('activity-map-modal')">Cancelar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal para visualizar detalhes da atividade -->
+<div id="activity-detail-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3 id="activity-detail-title">Detalhes da Atividade</h3>
+        <div id="activity-detail-content">
+            <!-- Conteúdo será preenchido via JavaScript -->
+        </div>
+        <!-- ADICIONAR BOTÃO DE AGENDAMENTO -->
+        <div class="form-actions" style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px;">
+            <button class="btn btn-success" onclick="scheduleActivityFromMap()">
+                <i class="fas fa-calendar-plus"></i> Agendar no Calendário
+            </button>
+            <button class="btn btn-outline" onclick="closeModal('activity-detail-modal')">Fechar</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+
+
+    document.addEventListener('DOMContentLoaded', function() {
+        if (typeof vis !== 'undefined') {
+            loadActivityMap();
+        } else {
+            console.error('Biblioteca Vis.js não carregada');
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
+            script.onload = function() {
+                console.log('Vis.js carregada com sucesso');
+                loadActivityMap();
+            };
+            script.onerror = function() {
+                console.error('Falha ao carregar Vis.js');
+                document.getElementById('flowchart-container').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <h3>Erro ao carregar biblioteca de visualização</h3>
+                        <p>Não foi possível carregar a biblioteca necessária para o fluxograma.</p>
+                        <button class="btn btn-primary" onclick="window.location.reload()">Tentar Novamente</button>
+                    </div>
+                `;
+            };
+            document.head.appendChild(script);
+        }
+    });
+
+// FUNÇÃO PARA AGENDAR ATIVIDADE A PARTIR DO MAPA - VERSÃO MELHORADA
+function scheduleActivityFromMap() {
+    if (!window.currentActivityDetail) {
+        showNotification('Nenhuma atividade selecionada', 'error');
+        return;
+    }
+
+    // Armazenar informações completas da atividade
+    localStorage.setItem('activityToSchedule', JSON.stringify({
+        id: window.currentActivityDetail.id,
+        name: window.currentActivityDetail.name,
+        category_name: window.currentActivityDetail.category_name,
+        category_color: window.currentActivityDetail.category_color,
+        // Adicionar informações extras se disponíveis
+        target_value: window.currentActivityDetail.target_value,
+        target_unit: window.currentActivityDetail.target_unit
+    }));
+
+    // Fechar o modal atual
+    closeModal('activity-detail-modal');
+    
+    // Mostrar mensagem de redirecionamento
+    showNotification(`Redirecionando para agendar "${window.currentActivityDetail.name}"...`, 'info');
+    
+    // Pequeno delay para mostrar a mensagem antes do redirecionamento
+    setTimeout(() => {
+        window.location.href = '/calendar';
+    }, 1000);
+}
+</script>
+<style>
+.flowchart-container {
+    width: 100%;
+    height: 70vh;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    background: #fafafa;
+    position: relative;
+    overflow: hidden;
+}
+
+.network-controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1000;
+    display: flex;
+    gap: 5px;
+}
+
+.zoom-controls {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.control-btn {
+    width: 40px;
+    height: 40px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.control-btn:hover {
+    background: #f5f5f5;
+}
+
+/* Melhorar a visualização dos nós */
+.vis-network {
+    background-color: #fafafa;
+}
+
+.vis-node {
+    border-width: 2px !important;
+    border-radius: 8px !important;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.vis-node.vis-selected {
+    box-shadow: 0 0 10px rgba(0,0,0,0.2) !important;
+}
+</style>
+{% endblock %}
+[file content end]

@@ -1,0 +1,13 @@
+flask
+flask_sqlalchemy
+flask_migrate
+python-dotenv
+psycopg2-binary
+pandas
+matplotlib
+reportlab
+numpy
+python-dateutil
+gunicorn
+flask_wtf
+werkzeug

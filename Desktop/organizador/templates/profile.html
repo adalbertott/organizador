@@ -1,0 +1,713 @@
+<!-- profile.html -->
+{% extends "base.html" %}
+
+{% block title %}Perfil & Análise - Sistema de Gamificação{% endblock %}
+
+{% block content %}
+<div class="profile-container">
+    <!-- Cabeçalho do Perfil -->
+    <div class="profile-header">
+        <div class="profile-identity">
+            <div class="profile-avatar">
+                <i class="fas fa-user-circle"></i>
+            </div>
+            <div class="profile-info">
+                <h1>Meu Perfil de Produtividade</h1>
+                <div class="profile-status" id="profile-status">
+                    <span class="status-badge loading">Analisando dados...</span>
+                </div>
+            </div>
+        </div>
+        <div class="profile-actions">
+            <button class="btn btn-outline" onclick="refreshAnalysis()">
+                <i class="fas fa-sync-alt"></i> Atualizar Análise
+            </button>
+            <button class="btn btn-primary" onclick="exportProfileData()">
+                <i class="fas fa-download"></i> Exportar Relatório
+            </button>
+        </div>
+    </div>
+
+    <!-- Resumo da IA -->
+    <div class="ai-summary-card">
+        <div class="ai-header">
+            <i class="fas fa-robot"></i>
+            <h3>Análise da IA</h3>
+        </div>
+        <div class="ai-summary" id="ai-summary">
+            <div class="loading-state">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>Analisando seus padrões de produtividade...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Grid de Métricas Principais -->
+    <div class="metrics-grid">
+        <!-- Consistência -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <div class="metric-icon">
+                    <i class="fas fa-calendar-check"></i>
+                </div>
+                <h3>Consistência</h3>
+            </div>
+            <div class="metric-body">
+                <div class="metric-value" id="consistency-score">--</div>
+                <div class="metric-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="consistency-progress"></div>
+                    </div>
+                </div>
+                <div class="metric-details" id="consistency-details">
+                    Carregando...
+                </div>
+            </div>
+        </div>
+
+        <!-- Diversificação -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <div class="metric-icon">
+                    <i class="fas fa-layer-group"></i>
+                </div>
+                <h3>Diversificação</h3>
+            </div>
+            <div class="metric-body">
+                <div class="metric-value" id="diversification-score">--</div>
+                <div class="metric-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="diversification-progress"></div>
+                    </div>
+                </div>
+                <div class="metric-details" id="diversification-details">
+                    Carregando...
+                </div>
+            </div>
+        </div>
+
+        <!-- Cumprimento -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <div class="metric-icon">
+                    <i class="fas fa-check-double"></i>
+                </div>
+                <h3>Cumprimento</h3>
+            </div>
+            <div class="metric-body">
+                <div class="metric-value" id="completion-rate">--</div>
+                <div class="metric-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="completion-progress"></div>
+                    </div>
+                </div>
+                <div class="metric-details" id="completion-details">
+                    Carregando...
+                </div>
+            </div>
+        </div>
+
+        <!-- Eficiência -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <div class="metric-icon">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <h3>Eficiência</h3>
+            </div>
+            <div class="metric-body">
+                <div class="metric-value" id="efficiency-score">--</div>
+                <div class="metric-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="efficiency-progress"></div>
+                    </div>
+                </div>
+                <div class="metric-details" id="efficiency-details">
+                    Carregando...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Análises Detalhadas -->
+    <div class="analysis-tabs">
+        <div class="tab-headers">
+            <button class="tab-btn active" onclick="showTab('consistency')">
+                <i class="fas fa-calendar-alt"></i> Consistência
+            </button>
+            <button class="tab-btn" onclick="showTab('diversification')">
+                <i class="fas fa-palette"></i> Diversificação
+            </button>
+            <button class="tab-btn" onclick="showTab('calendar')">
+                <i class="fas fa-calendar-day"></i> Calendário
+            </button>
+            <button class="tab-btn" onclick="showTab('patterns')">
+                <i class="fas fa-chart-bar"></i> Padrões
+            </button>
+        </div>
+
+        <div class="tab-content">
+            <!-- Tab Consistência -->
+            <div id="consistency-tab" class="tab-pane active">
+                <div class="tab-grid">
+                    <div class="analysis-card">
+                        <h4><i class="fas fa-fire"></i> Sequência Atual</h4>
+                        <div class="streak-display">
+                            <div class="streak-count" id="current-streak">0</div>
+                            <div class="streak-label">dias consecutivos</div>
+                        </div>
+                        <div class="streak-history" id="streak-history">
+                            <canvas id="streakChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="analysis-card">
+                        <h4><i class="fas fa-calendar-week"></i> Atividade Semanal</h4>
+                        <div class="week-activity" id="week-activity">
+                            <canvas id="weeklyChart"></canvas>
+                        </div>
+                        <div class="week-stats" id="week-stats">
+                            <div class="stat-item">
+                                <span>Dia mais produtivo:</span>
+                                <strong id="most-productive-day">--</strong>
+                            </div>
+                            <div class="stat-item">
+                                <span>Atividades/semana:</span>
+                                <strong id="weekly-avg">--</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Diversificação -->
+            <div id="diversification-tab" class="tab-pane">
+                <div class="tab-grid">
+                    <div class="analysis-card wide">
+                        <h4><i class="fas fa-chart-pie"></i> Distribuição por Categoria</h4>
+                        <div class="category-distribution">
+                            <canvas id="categoryChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="analysis-card">
+                        <h4><i class="fas fa-balance-scale"></i> Equilíbrio</h4>
+                        <div class="balance-metrics">
+                            <div class="balance-item">
+                                <div class="balance-label">Categorias Ativas</div>
+                                <div class="balance-value" id="active-categories">0</div>
+                            </div>
+                            <div class="balance-item">
+                                <div class="balance-label">Categoria Principal</div>
+                                <div class="balance-value" id="main-category">--</div>
+                            </div>
+                            <div class="balance-item">
+                                <div class="balance-label">Área Negligenciada</div>
+                                <div class="balance-value" id="neglected-category">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Calendário -->
+            <div id="calendar-tab" class="tab-pane">
+                <div class="tab-grid">
+                    <div class="analysis-card">
+                        <h4><i class="fas fa-tasks"></i> Tarefas vs. Calendário</h4>
+                        <div class="calendar-stats">
+                            <div class="stat-comparison">
+                                <div class="comparison-item">
+                                    <div class="comparison-label">Tarefas Criadas</div>
+                                    <div class="comparison-value" id="created-tasks">0</div>
+                                </div>
+                                <div class="comparison-item">
+                                    <div class="comparison-label">Tarefas Agendadas</div>
+                                    <div class="comparison-value" id="scheduled-tasks">0</div>
+                                </div>
+                                <div class="comparison-item">
+                                    <div class="comparison-label">Taxa de Agendamento</div>
+                                    <div class="comparison-value" id="scheduling-rate">0%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="analysis-card">
+                        <h4><i class="fas fa-check-circle"></i> Cumprimento do Calendário</h4>
+                        <div class="completion-stats">
+                            <div class="completion-meter">
+                                <div class="meter-value" id="calendar-completion">0%</div>
+                                <div class="meter-label">Taxa de Conclusão</div>
+                            </div>
+                            <div class="completion-details" id="completion-breakdown">
+                                <div class="detail-item">
+                                    <span>Concluídas no prazo:</span>
+                                    <span id="on-time-tasks">0</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span>Atrasadas:</span>
+                                    <span id="late-tasks">0</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span>Não iniciadas:</span>
+                                    <span id="not-started-tasks">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Padrões -->
+            <div id="patterns-tab" class="tab-pane">
+                <div class="tab-grid">
+                    <div class="analysis-card wide">
+                        <h4><i class="fas fa-chart-line"></i> Evolução Temporal</h4>
+                        <div class="time-evolution">
+                            <canvas id="evolutionChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="analysis-card">
+                        <h4><i class="fas fa-user-tag"></i> Seu Perfil</h4>
+                        <div class="profile-type" id="profile-type">
+                            <div class="type-icon">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <div class="type-info">
+                                <div class="type-name" id="profile-type-name">Carregando...</div>
+                                <div class="type-desc" id="profile-type-desc"></div>
+                            </div>
+                        </div>
+                        <div class="profile-strengths" id="profile-strengths">
+                            <!-- Pontos fortes serão inseridos aqui -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recomendações da IA -->
+    <div class="recommendations-section">
+        <h3><i class="fas fa-lightbulb"></i> Recomendações Personalizadas</h3>
+        <div class="recommendations-grid" id="recommendations">
+            <div class="recommendation-card">
+                <div class="recommendation-header">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <h4>Analisando...</h4>
+                </div>
+                <p>Processando seus dados para recomendações personalizadas.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal de Detalhes do Perfil -->
+<div id="profile-details-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3 id="profile-details-title">Detalhes do Perfil</h3>
+        <div class="modal-body" id="profile-details-content">
+            <!-- Conteúdo será preenchido via JavaScript -->
+        </div>
+    </div>
+</div>
+
+<!-- Incluir Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block styles %}
+<style>
+.profile-container {
+    padding: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.profile-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 2px solid #eee;
+}
+
+.profile-identity {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.profile-avatar {
+    font-size: 4rem;
+    color: #3498db;
+}
+
+.profile-info h1 {
+    margin: 0;
+    font-size: 1.8rem;
+    color: #333;
+}
+
+.profile-status .status-badge {
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.profile-actions {
+    display: flex;
+    gap: 1rem;
+}
+
+.ai-summary-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+.ai-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.ai-header i {
+    font-size: 1.5rem;
+}
+
+.ai-summary {
+    font-size: 1.1rem;
+    line-height: 1.6;
+}
+
+.loading-state {
+    text-align: center;
+    padding: 2rem;
+}
+
+.loading-state i {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.metric-card {
+    background: white;
+    border-radius: 10px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    border: 1px solid #eee;
+    transition: transform 0.3s;
+}
+
+.metric-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+}
+
+.metric-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.metric-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #f0f7ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #3498db;
+    font-size: 1.2rem;
+}
+
+.metric-body {
+    text-align: center;
+}
+
+.metric-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    color: #2c3e50;
+}
+
+.metric-progress {
+    margin: 1rem 0;
+}
+
+.metric-details {
+    font-size: 0.9rem;
+    color: #666;
+    margin-top: 1rem;
+    line-height: 1.4;
+}
+
+.analysis-tabs {
+    background: white;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 2rem;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+
+.tab-headers {
+    display: flex;
+    background: #f8f9fa;
+    border-bottom: 1px solid #eee;
+}
+
+.tab-btn {
+    flex: 1;
+    padding: 1rem;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all 0.3s;
+}
+
+.tab-btn:hover {
+    background: #e9ecef;
+}
+
+.tab-btn.active {
+    background: white;
+    border-bottom: 3px solid #3498db;
+    font-weight: 600;
+}
+
+.tab-content {
+    padding: 2rem;
+}
+
+.tab-pane {
+    display: none;
+}
+
+.tab-pane.active {
+    display: block;
+}
+
+.tab-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+}
+
+.analysis-card {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+
+.analysis-card.wide {
+    grid-column: span 2;
+}
+
+.streak-display {
+    text-align: center;
+    margin: 2rem 0;
+}
+
+.streak-count {
+    font-size: 3rem;
+    font-weight: 700;
+    color: #e74c3c;
+}
+
+.streak-label {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.week-stats {
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #ddd;
+}
+
+.stat-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.balance-metrics {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.balance-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.8rem;
+    background: white;
+    border-radius: 6px;
+}
+
+.stat-comparison {
+    display: flex;
+    justify-content: space-around;
+    margin: 2rem 0;
+}
+
+.comparison-item {
+    text-align: center;
+}
+
+.comparison-label {
+    font-size: 0.9rem;
+    color: #666;
+    margin-bottom: 0.5rem;
+}
+
+.comparison-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #3498db;
+}
+
+.completion-meter {
+    text-align: center;
+    margin: 2rem 0;
+}
+
+.meter-value {
+    font-size: 3rem;
+    font-weight: 700;
+    color: #2ecc71;
+}
+
+.meter-label {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.completion-details {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 1.5rem;
+}
+
+.detail-item {
+    text-align: center;
+}
+
+.profile-type {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid #ddd;
+}
+
+.type-icon {
+    font-size: 3rem;
+    color: #3498db;
+}
+
+.type-name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #2c3e50;
+}
+
+.type-desc {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.profile-strengths {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.strength-tag {
+    background: #e8f5e8;
+    color: #27ae60;
+    padding: 0.3rem 0.8rem;
+    border-radius: 15px;
+    font-size: 0.85rem;
+}
+
+.recommendations-section {
+    background: white;
+    border-radius: 10px;
+    padding: 2rem;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+
+.recommendations-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.recommendation-card {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 1.5rem;
+    border-left: 4px solid #3498db;
+}
+
+.recommendation-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.recommendation-header i {
+    font-size: 1.5rem;
+    color: #3498db;
+}
+
+@media (max-width: 768px) {
+    .profile-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+    
+    .profile-actions {
+        width: 100%;
+    }
+    
+    .tab-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .analysis-card.wide {
+        grid-column: span 1;
+    }
+}
+</style>
+{% endblock %}
