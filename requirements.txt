@@ -1,4 +1,4 @@
 Flask==2.3.3
 Flask-SQLAlchemy==3.0.5
+SQLAlchemy==2.0.25
 python-dateutil==2.8.2
-gunicorn 
