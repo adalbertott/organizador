@@ -2481,115 +2481,14 @@ def api_health():
             'timestamp': datetime.utcnow().isoformat()
         }), 500
     
-def create_sample_data():
-    """Cria dados de exemplo para demonstração"""
-    # Verificar se já existe usuário
-    user = User.query.get(1)
-    if not user:
-        user = User(id=1, username='demo', email='demo@example.com')
-        db.session.add(user)
-        db.session.commit()
-        
-        # Criar categorias de exemplo
-        categories = [
-            Category(name='Leitura', description='Livros e materiais de leitura', color='#3498db', icon='📚', user_id=1),
-            Category(name='Exercício', description='Atividades físicas', color='#2ecc71', icon='🏃', user_id=1),
-            Category(name='Estudo', description='Aprendizado e desenvolvimento', color='#9b59b6', icon='📖', user_id=1),
-            Category(name='Música', description='Prática musical', color='#e74c3c', icon='🎵', user_id=1),
-            Category(name='Lazer', description='Atividades de lazer e diversão', color='#f1c40f', icon='🎮', user_id=1),
-            Category(name='Finanças', description='Controle financeiro e investimentos', color='#1abc9c', icon='💰', user_id=1),
-            Category(name='Casa', description='Tarefas domésticas e organização', color='#d35400', icon='🏠', user_id=1),
-            Category(name='Carro', description='Manutenção e cuidados com veículo', color='#34495e', icon='🚗', user_id=1),
-            Category(name='Trabalho', description='Atividades profissionais', color='#8e44ad', icon='💼', user_id=1)
-        ]
-        
-        for category in categories:
-            db.session.add(category)
-        
-        db.session.commit()
-
-        # Criar algumas atividades de exemplo com diferentes tipos de medição
-        activity1 = Activity(
-            name='Ler Dom Casmurro',
-            description='Ler o clássico da literatura brasileira',
-            category_id=1,  # Leitura
-            user_id=1,
-            measurement_type='units',
-            status='in_progress',
-            target_value=300,
-            target_unit='páginas'
-        )
-        db.session.add(activity1)
-
-        activity2 = Activity(
-            name='Estudar Flask',
-            description='Aprender framework web Flask',
-            category_id=3,  # Estudo
-            user_id=1,
-            measurement_type='percentage',
-            status='in_progress',
-            manual_percentage=25.0
-        )
-        db.session.add(activity2)
-
-        activity3 = Activity(
-            name='Implementar sistema de gamificação',
-            description='Desenvolver o sistema atual',
-            category_id=3,  # Estudo
-            user_id=1,
-            measurement_type='boolean',
-            status='completed',
-            parent_activity_id=activity2.id
-        )
-        db.session.add(activity3)
-
-        # Criar recompensas de exemplo
-        reward1 = Reward(
-            name='Leitor Ávido',
-            description='Complete sua primeira atividade de leitura',
-            points_required=50,
-            user_id=1
-        )
-        db.session.add(reward1)
-
-        reward2 = Reward(
-            name='Estudante Dedicado',
-            description='Complete 10 horas de estudo',
-            points_required=100,
-            user_id=1
-        )
-        db.session.add(reward2)
-
-        db.session.commit()
-
-        # Criar alguns progressos de exemplo
-        progress1 = Progress(
-            activity_id=activity1.id,
-            user_id=1,
-            date=date.today(),
-            value=50,
-            unit='páginas',
-            notes='Primeira sessão de leitura'
-        )
-        db.session.add(progress1)
-
-        progress2 = Progress(
-            activity_id=activity2.id,
-            user_id=1,
-            date=date.today(),
-            value=25,
-            unit='%',
-            notes='Introdução ao Flask concluída'
-        )
-        db.session.add(progress2)
-
-        db.session.commit()
 # ==================== INICIALIZAÇÃO DO BANCO ====================
 
 def init_database():
     """Inicializa o banco de dados e cria tabelas"""
     with app.app_context():
         try:
+            # Remover tabelas existentes para recriar com a nova estrutura
+            db.drop_all()
             db.create_all()
             print("✅ Tabelas criadas/verificadas com sucesso!")
             
