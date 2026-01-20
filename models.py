@@ -4,11 +4,13 @@ from sqlalchemy.sql import func
 
 db = SQLAlchemy()
 
+
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(200))  # Campo para senha (em produção, usar hash!)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     categories = db.relationship('Category', backref='user', lazy=True, cascade="all, delete-orphan")
@@ -16,6 +18,10 @@ class User(db.Model):
     progress = db.relationship('Progress', backref='user', lazy=True, cascade="all, delete-orphan")
     rewards = db.relationship('Reward', backref='user', lazy=True, cascade="all, delete-orphan")
     schedules = db.relationship('ScheduledActivity', backref='user', lazy=True, cascade="all, delete-orphan")
+    points = db.relationship('UserPoints', backref='user', lazy=True, cascade="all, delete-orphan")
+    transactions = db.relationship('PointTransaction', backref='user', lazy=True, cascade="all, delete-orphan")
+    streaks = db.relationship('WeeklyStreak', backref='user', lazy=True, cascade="all, delete-orphan")
+
 
 class Category(db.Model):
     __tablename__ = 'categories'

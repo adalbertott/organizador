@@ -71,7 +71,24 @@
                 <button class="btn btn-success" onclick="showLogProgressModal()">
                     <i class="fas fa-chart-line"></i> Registrar Progresso
                 </button>
+                {% if session.get('user_id') %}
+                <button class="btn btn-danger" onclick="resetDatabase()">
+                    <i class="fas fa-database"></i> Resetar Banco
+                </button>
+                {% endif %}
             </div>
+            
+            {% if session.get('user_id') %}
+            <div class="user-info-card" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                <h4>Informações do Usuário</h4>
+                <p>Usuário ID: {{ session.get('user_id') }}</p>
+                <p>Para testes:</p>
+                <ul>
+                    <li><strong>Usuário 1:</strong> usuario1 / 123321</li>
+                    <li><strong>Usuário 2:</strong> usuario2 / 123321</li>
+                </ul>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -259,8 +276,6 @@
 </div>
 {% endblock %}
 
-<!-- dashboard.html - Atualizar a seção de scripts -->
-<!-- dashboard.html - Atualizar a seção de scripts -->
 {% block scripts %}
 <script>
     // Executar quando a página estiver completamente carregada
@@ -303,5 +318,35 @@
             }
         }, 500);
     });
+    
+    // Função para resetar banco de dados (chamada pelo botão)
+    async function resetDatabase() {
+        if (!confirm('⚠️ ATENÇÃO: Esta ação irá APAGAR TODOS os dados do banco de dados para o usuário atual.\n\nIsso inclui:\n• Todas as atividades\n• Todas as categorias\n• Todo o progresso registrado\n• Todas as recompensas\n• Todo o histórico\n\nTem certeza que deseja continuar?')) {
+            return;
+        }
+        
+        try {
+            showNotification('Resetando banco de dados...', 'info');
+            
+            const response = await fetch('/api/auth/reset_database', {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                showNotification('✅ Banco de dados resetado com sucesso!', 'success');
+                
+                // Recarregar a página para mostrar dados vazios
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1500);
+            } else {
+                const data = await response.json();
+                showNotification(data.message || 'Erro ao resetar banco de dados', 'error');
+            }
+        } catch (error) {
+            console.error('Erro ao resetar banco de dados:', error);
+            showNotification('Erro ao resetar banco de dados', 'error');
+        }
+    }
 </script>
 {% endblock %}

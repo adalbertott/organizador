@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from models import db, User, Category, Activity, Progress, Reward, ScheduledActivity, UserPoints, PointTransaction, WeeklyStreak    
 from datetime import datetime, date, timedelta
 import json
@@ -7,6 +7,7 @@ import random
 from sqlalchemy import func, or_
 
 app = Flask(__name__)
+app.secret_key = 'gamification_secret_key_123'  # Chave secreta para sessions
 
 # Configuração para PostgreSQL no Render
 database_url = os.environ.get('DATABASE_URL')
@@ -30,8 +31,204 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 
-# Usuário demo (em produção, implementar sistema de login)
-CURRENT_USER_ID = 1
+# Função para obter o ID do usuário atual
+def get_current_user_id():
+    """Retorna o ID do usuário atual da session, ou None se não houver"""
+    return session.get('user_id')
+
+# Verificar se o usuário está autenticado em cada requisição
+@app.before_request
+def check_authentication():
+    # Rotas que não requerem autenticação
+    public_routes = ['login', 'logout', 'api_auth_login', 'api_auth_logout', 
+                     'api_auth_status', 'static', 'dashboard', 'api_health']
+    
+    # Verificar se a rota atual é pública
+    if request.endpoint in public_routes:
+        return
+    
+    # Se não há usuário logado, redirecionar para dashboard que mostrará login
+    if not get_current_user_id():
+        return redirect(url_for('dashboard'))
+
+# Funções de autenticação
+@app.route('/api/auth/login', methods=['POST'])
+def api_auth_login():
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        # Verificação simples (em produção, use bcrypt!)
+        if username in ['usuario1', 'usuario2'] and password == '123321':
+            user_id = 1 if username == 'usuario1' else 2
+            
+            # Verificar se o usuário existe no banco, se não, criar
+            user = User.query.get(user_id)
+            if not user:
+                if user_id == 1:
+                    # Usuário 1 mantém os dados existentes (ou cria dados de exemplo)
+                    user = User(id=user_id, username='usuario1', email='usuario1@exemplo.com')
+                else:
+                    # Usuário 2 começa do zero
+                    user = User(id=user_id, username='usuario2', email='usuario2@exemplo.com')
+                db.session.add(user)
+                db.session.commit()
+            
+            # Definir session
+            session['user_id'] = user_id
+            session['username'] = username
+            
+            return jsonify({
+                'success': True,
+                'message': 'Login realizado com sucesso',
+                'user_id': user_id,
+                'username': username
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Usuário ou senha inválidos'
+            }), 401
+            
+    except Exception as e:
+        print(f"Erro no login: {str(e)}")
+        return jsonify({'success': False, 'message': 'Erro no servidor'}), 500
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_auth_logout():
+    session.clear()
+    return jsonify({'success': True, 'message': 'Logout realizado com sucesso'})
+
+@app.route('/api/auth/status', methods=['GET'])
+def api_auth_status():
+    user_id = get_current_user_id()
+    return jsonify({
+        'logged_in': user_id is not None,
+        'user_id': user_id,
+        'username': session.get('username')
+    })
+
+@app.route('/api/auth/reset_database', methods=['POST'])
+def api_auth_reset_database():
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'success': False, 'message': 'Usuário não autenticado'}), 401
+        
+        # Se for usuário 2, apagar tudo
+        if user_id == 2:
+            # Deletar todas as entradas do usuário 2
+            Progress.query.filter_by(user_id=2).delete()
+            ScheduledActivity.query.filter_by(user_id=2).delete()
+            Activity.query.filter_by(user_id=2).delete()
+            Category.query.filter_by(user_id=2).delete()
+            Reward.query.filter_by(user_id=2).delete()
+            UserPoints.query.filter_by(user_id=2).delete()
+            PointTransaction.query.filter_by(user_id=2).delete()
+            WeeklyStreak.query.filter_by(user_id=2).delete()
+            
+            db.session.commit()
+            
+            # Criar categorias básicas para o usuário 2
+            categories = [
+                Category(name='Leitura', color='#3498db', icon='📚', user_id=2),
+                Category(name='Exercício', color='#2ecc71', icon='🏃', user_id=2),
+                Category(name='Estudo', color='#9b59b6', icon='📖', user_id=2),
+            ]
+            
+            for category in categories:
+                db.session.add(category)
+            
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Banco de dados do usuário 2 resetado com sucesso!'
+            })
+        else:
+            # Para usuário 1, apenas limpar dados, mas manter estrutura
+            Progress.query.filter_by(user_id=1).delete()
+            ScheduledActivity.query.filter_by(user_id=1).delete()
+            Activity.query.filter_by(user_id=1).delete()
+            Category.query.filter_by(user_id=1).delete()
+            Reward.query.filter_by(user_id=1).delete()
+            UserPoints.query.filter_by(user_id=1).delete()
+            PointTransaction.query.filter_by(user_id=1).delete()
+            WeeklyStreak.query.filter_by(user_id=1).delete()
+            
+            db.session.commit()
+            
+            # Recriar dados de exemplo para usuário 1
+            create_sample_data_for_user(1)
+            
+            return jsonify({
+                'success': True,
+                'message': 'Banco de dados do usuário 1 resetado com sucesso! Dados de exemplo recriados.'
+            })
+            
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao resetar banco: {str(e)}")
+        return jsonify({'success': False, 'message': f'Erro ao resetar banco: {str(e)}'}), 500
+
+# Função para criar dados de exemplo para um usuário
+def create_sample_data_for_user(user_id):
+    """Cria dados de exemplo para um usuário específico"""
+    # Criar categorias de exemplo
+    categories = [
+        Category(name='Leitura', description='Livros e materiais de leitura', color='#3498db', icon='📚', user_id=user_id),
+        Category(name='Exercício', description='Atividades físicas', color='#2ecc71', icon='🏃', user_id=user_id),
+        Category(name='Estudo', description='Aprendizado e desenvolvimento', color='#9b59b6', icon='📖', user_id=user_id),
+    ]
+    
+    for category in categories:
+        db.session.add(category)
+    
+    db.session.commit()
+    
+    # Buscar categorias criadas
+    categoria_leitura = Category.query.filter_by(name='Leitura', user_id=user_id).first()
+    categoria_estudo = Category.query.filter_by(name='Estudo', user_id=user_id).first()
+    
+    # Criar atividades de exemplo
+    if categoria_leitura:
+        atividade1 = Activity(
+            name='Ler Dom Casmurro',
+            description='Ler o clássico da literatura brasileira',
+            category_id=categoria_leitura.id,
+            user_id=user_id,
+            measurement_type='units',
+            status='in_progress',
+            target_value=300,
+            target_unit='páginas'
+        )
+        db.session.add(atividade1)
+    
+    if categoria_estudo:
+        atividade2 = Activity(
+            name='Estudar Flask',
+            description='Aprender framework web Flask',
+            category_id=categoria_estudo.id,
+            user_id=user_id,
+            measurement_type='percentage',
+            status='in_progress',
+            manual_percentage=25.0
+        )
+        db.session.add(atividade2)
+    
+    db.session.commit()
+    
+    # Criar recompensas de exemplo
+    reward1 = Reward(
+        name='Leitor Ávido',
+        description='Complete sua primeira atividade de leitura',
+        points_required=50,
+        user_id=user_id
+    )
+    db.session.add(reward1)
+    
+    db.session.commit()
 
 # Função auxiliar para calcular progresso
 def calculate_activity_progress(activity):
@@ -71,6 +268,9 @@ def dashboard():
 
 @app.route('/calendar')
 def calendar():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
     return render_template('calendar.html')
 
 @app.context_processor
@@ -79,25 +279,39 @@ def utility_processor():
 
 @app.route('/categories')
 def categories():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
     return render_template('categories.html')
 
 @app.route('/rewards')
 def rewards():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
     return render_template('rewards.html')
 
 @app.route('/activity_map')
 def activity_map():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
     return render_template('activity_map.html')
 
 @app.route('/profile')
 def profile():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
     return render_template('profile.html')
 
 # API para estatísticas do perfil
 @app.route('/api/profile/stats')
 def api_profile_stats():
     try:
-        user_id = CURRENT_USER_ID
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
         
         # Estatísticas de tempo por categoria (baseado no calendário)
         category_hours = db.session.query(
@@ -267,10 +481,17 @@ def get_fallback_profile_data(user_id):
 # API Routes
 @app.route('/history')
 def history():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
     return render_template('history.html')
     
 @app.route('/api/categories', methods=['GET', 'POST'])
 def api_categories():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     if request.method == 'POST':
         data = request.get_json()
         category = Category(
@@ -278,13 +499,13 @@ def api_categories():
             description=data.get('description', ''),
             color=data.get('color', '#3498db'),
             icon=data.get('icon', '📁'),
-            user_id=CURRENT_USER_ID
+            user_id=user_id
         )
         db.session.add(category)
         db.session.commit()
         return jsonify({'id': category.id, 'message': 'Categoria criada com sucesso'})
     
-    categories = Category.query.filter_by(user_id=CURRENT_USER_ID).all()
+    categories = Category.query.filter_by(user_id=user_id).all()
     return jsonify([{
         'id': cat.id,
         'name': cat.name,
@@ -296,6 +517,10 @@ def api_categories():
 
 @app.route('/api/schedules', methods=['GET', 'POST'])
 def api_schedules():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     if request.method == 'POST':
         data = request.get_json()
         
@@ -303,7 +528,7 @@ def api_schedules():
         
         schedule = ScheduledActivity(
             activity_id=data['activity_id'],
-            user_id=CURRENT_USER_ID,
+            user_id=user_id,
             scheduled_date=scheduled_date,
             scheduled_time=data['scheduled_time'],
             duration=data['duration']
@@ -322,7 +547,7 @@ def api_schedules():
     week_end = week_start + timedelta(days=6)
     
     schedules = ScheduledActivity.query.filter(
-        ScheduledActivity.user_id == CURRENT_USER_ID,
+        ScheduledActivity.user_id == user_id,
         ScheduledActivity.scheduled_date >= week_start,
         ScheduledActivity.scheduled_date <= week_end
     ).all()
@@ -339,7 +564,11 @@ def api_schedules():
 
 @app.route('/api/schedules/<int:schedule_id>', methods=['PUT', 'DELETE'])
 def api_schedule(schedule_id):
-    schedule = ScheduledActivity.query.filter_by(id=schedule_id, user_id=CURRENT_USER_ID).first_or_404()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    schedule = ScheduledActivity.query.filter_by(id=schedule_id, user_id=user_id).first_or_404()
     
     if request.method == 'PUT':
         data = request.get_json()
@@ -361,7 +590,11 @@ def api_schedule(schedule_id):
 
 @app.route('/api/schedules/<int:schedule_id>/replicate', methods=['POST'])
 def api_replicate_schedule(schedule_id):
-    original_schedule = ScheduledActivity.query.filter_by(id=schedule_id, user_id=CURRENT_USER_ID).first_or_404()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    original_schedule = ScheduledActivity.query.filter_by(id=schedule_id, user_id=user_id).first_or_404()
     data = request.get_json()
     
     replicate_type = data.get('type', 'weekly')
@@ -381,7 +614,7 @@ def api_replicate_schedule(schedule_id):
             # Criar novo agendamento
             new_schedule = ScheduledActivity(
                 activity_id=original_schedule.activity_id,
-                user_id=CURRENT_USER_ID,
+                user_id=user_id,
                 scheduled_date=current_date,
                 scheduled_time=original_schedule.scheduled_time,
                 duration=original_schedule.duration
@@ -417,7 +650,11 @@ def should_replicate(current_date, original_date, replicate_type, days_of_week):
 
 @app.route('/api/categories/<int:category_id>', methods=['PUT', 'DELETE'])
 def api_category(category_id):
-    category = Category.query.filter_by(id=category_id, user_id=CURRENT_USER_ID).first_or_404()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    category = Category.query.filter_by(id=category_id, user_id=user_id).first_or_404()
     
     if request.method == 'PUT':
         data = request.get_json()
@@ -436,7 +673,9 @@ def api_category(category_id):
 # No app.py
 @app.route('/api/profile/ai_analysis')
 def api_ai_analysis():
-    user_id = CURRENT_USER_ID
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
     
     # Buscar dados para análise
     profile_data = get_profile_stats(user_id)
@@ -452,6 +691,10 @@ def api_ai_analysis():
 
 @app.route('/api/activities', methods=['GET', 'POST'])
 def api_activities():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     if request.method == 'POST':
         data = request.get_json()
         
@@ -478,7 +721,7 @@ def api_activities():
             name=data['name'],
             description=data.get('description', ''),
             category_id=data['category_id'],
-            user_id=CURRENT_USER_ID,
+            user_id=user_id,
             measurement_type=measurement_type,
             status=data.get('status', 'want_to_do'),
             target_value=target_value,
@@ -494,7 +737,7 @@ def api_activities():
         return jsonify({'id': activity.id, 'message': 'Atividade criada com sucesso'})
     
     # GET: Retorna atividades com progresso calculado
-    activities = Activity.query.filter_by(user_id=CURRENT_USER_ID).all()
+    activities = Activity.query.filter_by(user_id=user_id).all()
     result = []
     for act in activities:
         progress = calculate_activity_progress(act)
@@ -912,7 +1155,9 @@ def calculate_consistency_score(user_id):
 def api_ai_profile_data():
     """Endpoint para fornecer dados completos para análise de IA"""
     try:
-        user_id = CURRENT_USER_ID
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
         
         # Obter todos os dados necessários
         profile_stats = get_profile_stats(user_id)
@@ -935,7 +1180,10 @@ def api_ai_profile_data():
 def api_profile_historical():
     """Retorna dados históricos do usuário para análise"""
     try:
-        user_id = CURRENT_USER_ID
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
         days = request.args.get('days', 90, type=int)
         
         # Data de início para a consulta
@@ -1120,7 +1368,11 @@ def analyze_historical_patterns(historical_data):
 
 @app.route('/api/activities/<int:activity_id>', methods=['GET', 'PUT', 'DELETE'])
 def api_activity(activity_id):
-    activity = Activity.query.filter_by(id=activity_id, user_id=CURRENT_USER_ID).first_or_404()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    activity = Activity.query.filter_by(id=activity_id, user_id=user_id).first_or_404()
     
     if request.method == 'GET':
         progress = calculate_activity_progress(activity)
@@ -1195,7 +1447,11 @@ def api_activity(activity_id):
 def api_activities_hierarchy():
     """Retorna a hierarquia completa de atividades para visualização gráfica"""
     try:
-        activities = Activity.query.filter_by(user_id=CURRENT_USER_ID).all()
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        activities = Activity.query.filter_by(user_id=user_id).all()
         
         def build_hierarchy(activity_id=None):
             children = [a for a in activities if a.parent_activity_id == activity_id]
@@ -1262,13 +1518,17 @@ def calculate_streak_bonus(user_id):
 def api_progress():
     """Registra progresso com suporte a diferentes tipos de medição"""
     try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'message': 'Usuário não autenticado'}), 401
+        
         data = request.get_json()
         
         # Validar campos obrigatórios
         if not data.get('activity_id'):
             return jsonify({'message': 'ID da atividade é obrigatório'}), 400
         
-        activity = Activity.query.filter_by(id=data['activity_id'], user_id=CURRENT_USER_ID).first()
+        activity = Activity.query.filter_by(id=data['activity_id'], user_id=user_id).first()
         if not activity:
             return jsonify({'message': 'Atividade não encontrada'}), 404
         
@@ -1309,7 +1569,7 @@ def api_progress():
         
         progress = Progress(
             activity_id=activity.id,
-            user_id=CURRENT_USER_ID,
+            user_id=user_id,
             date=progress_date,
             value=value,
             unit=unit,
@@ -1341,7 +1601,7 @@ def api_progress():
         
         # Bônus de sequência para atividades vindas de agendamento
         if from_schedule:
-            streak_bonus, _ = calculate_streak_bonus(CURRENT_USER_ID)
+            streak_bonus, _ = calculate_streak_bonus(user_id)
             points_earned += streak_bonus
         
         # Atualizar pontos no progresso
@@ -1349,9 +1609,9 @@ def api_progress():
         progress.streak_bonus = streak_bonus
         
         # Atualizar pontos do usuário
-        user_points = UserPoints.query.filter_by(user_id=CURRENT_USER_ID).first()
+        user_points = UserPoints.query.filter_by(user_id=user_id).first()
         if not user_points:
-            user_points = UserPoints(user_id=CURRENT_USER_ID, points=0)
+            user_points = UserPoints(user_id=user_id, points=0)
             db.session.add(user_points)
         
         user_points.points += points_earned
@@ -1364,7 +1624,7 @@ def api_progress():
                 description += f' + {streak_bonus} pts (sequência)'
             
             transaction = PointTransaction(
-                user_id=CURRENT_USER_ID,
+                user_id=user_id,
                 points=points_earned,
                 description=description,
                 activity_id=activity.id
@@ -1398,9 +1658,13 @@ def api_progress():
 # Nova rota para obter informações da sequência
 @app.route('/api/streak')
 def api_streak():
-    streak = WeeklyStreak.query.filter_by(user_id=CURRENT_USER_ID).first()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
     if not streak:
-        streak = WeeklyStreak(user_id=CURRENT_USER_ID, streak_count=0)
+        streak = WeeklyStreak(user_id=user_id, streak_count=0)
         db.session.add(streak)
         db.session.commit()
     
@@ -1426,15 +1690,19 @@ def api_streak():
 
 @app.route('/api/dashboard/stats')
 def api_dashboard_stats():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     # Estatísticas básicas para o dashboard
-    total_activities = Activity.query.filter_by(user_id=CURRENT_USER_ID).count()
-    completed_activities = Activity.query.filter_by(user_id=CURRENT_USER_ID, status='completed').count()
-    total_categories = Category.query.filter_by(user_id=CURRENT_USER_ID).count()
+    total_activities = Activity.query.filter_by(user_id=user_id).count()
+    completed_activities = Activity.query.filter_by(user_id=user_id, status='completed').count()
+    total_categories = Category.query.filter_by(user_id=user_id).count()
     
     # Progresso da semana
     week_start = date.today() - timedelta(days=date.today().weekday())
     week_progress = Progress.query.filter(
-        Progress.user_id == CURRENT_USER_ID,
+        Progress.user_id == user_id,
         Progress.date >= week_start
     ).count()
     
@@ -1448,9 +1716,13 @@ def api_dashboard_stats():
 @app.route('/api/points')
 def api_points():
     """Retorna o total de pontos do usuário"""
-    user_points = UserPoints.query.filter_by(user_id=CURRENT_USER_ID).first()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    user_points = UserPoints.query.filter_by(user_id=user_id).first()
     if not user_points:
-        user_points = UserPoints(user_id=CURRENT_USER_ID, points=0)
+        user_points = UserPoints(user_id=user_id, points=0)
         db.session.add(user_points)
         db.session.commit()
     
@@ -1462,8 +1734,12 @@ def api_points():
 @app.route('/api/points/transactions')
 def api_point_transactions():
     """Retorna o histórico de transações de pontos"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     transactions = PointTransaction.query.filter_by(
-        user_id=CURRENT_USER_ID
+        user_id=user_id
     ).order_by(PointTransaction.created_at.desc()).limit(50).all()
     
     return jsonify([{
@@ -1477,11 +1753,15 @@ def api_point_transactions():
 @app.route('/api/rewards/<int:reward_id>/purchase', methods=['POST'])
 def api_purchase_reward(reward_id):
     """Resgata uma recompensa usando pontos"""
-    reward = Reward.query.filter_by(id=reward_id, user_id=CURRENT_USER_ID).first_or_404()
-    user_points = UserPoints.query.filter_by(user_id=CURRENT_USER_ID).first()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    reward = Reward.query.filter_by(id=reward_id, user_id=user_id).first_or_404()
+    user_points = UserPoints.query.filter_by(user_id=user_id).first()
     
     if not user_points:
-        user_points = UserPoints(user_id=CURRENT_USER_ID, points=0)
+        user_points = UserPoints(user_id=user_id, points=0)
         db.session.add(user_points)
     
     if user_points.points < reward.points_required:
@@ -1497,7 +1777,7 @@ def api_purchase_reward(reward_id):
     
     # Registrar transação
     transaction = PointTransaction(
-        user_id=CURRENT_USER_ID,
+        user_id=user_id,
         points=-reward.points_required,
         description=f'Resgate: {reward.name}'
     )
@@ -1511,6 +1791,10 @@ def api_purchase_reward(reward_id):
 
 @app.route('/api/rewards', methods=['GET', 'POST'])
 def api_rewards():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     if request.method == 'POST':
         data = request.get_json()
         
@@ -1528,13 +1812,13 @@ def api_rewards():
             points_required=points_required,
             condition_type='points',
             condition_value=points_required,
-            user_id=CURRENT_USER_ID
+            user_id=user_id
         )
         db.session.add(reward)
         db.session.commit()
         return jsonify({'id': reward.id, 'message': 'Recompensa criada com sucesso'})
     
-    rewards = Reward.query.filter_by(user_id=CURRENT_USER_ID).all()
+    rewards = Reward.query.filter_by(user_id=user_id).all()
     return jsonify([{
         'id': reward.id,
         'name': reward.name,
@@ -1551,7 +1835,11 @@ def api_rewards():
 
 @app.route('/api/rewards/<int:reward_id>', methods=['PUT', 'DELETE'])
 def api_reward(reward_id):
-    reward = Reward.query.filter_by(id=reward_id, user_id=CURRENT_USER_ID).first_or_404()
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    reward = Reward.query.filter_by(id=reward_id, user_id=user_id).first_or_404()
     
     if request.method == 'PUT':
         data = request.get_json()
@@ -1585,13 +1873,17 @@ def api_reward(reward_id):
 @app.route('/api/points/add', methods=['POST'])
 def api_add_points():
     """Adiciona pontos ao usuário (para testes)"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     data = request.get_json()
     points = data.get('points', 0)
     description = data.get('description', 'Pontos adicionados')
     
-    user_points = UserPoints.query.filter_by(user_id=CURRENT_USER_ID).first()
+    user_points = UserPoints.query.filter_by(user_id=user_id).first()
     if not user_points:
-        user_points = UserPoints(user_id=CURRENT_USER_ID, points=0)
+        user_points = UserPoints(user_id=user_id, points=0)
         db.session.add(user_points)
     
     user_points.points += points
@@ -1599,7 +1891,7 @@ def api_add_points():
     
     # Registrar transação
     transaction = PointTransaction(
-        user_id=CURRENT_USER_ID,
+        user_id=user_id,
         points=points,
         description=description
     )
@@ -1613,6 +1905,10 @@ def api_add_points():
 
 @app.route('/api/progress/recent')
 def api_recent_progress():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
     # Retorna progressos recentes (últimos 7 dias)
     since_date = request.args.get('since')
     if since_date:
@@ -1621,7 +1917,7 @@ def api_recent_progress():
         since_date = date.today() - timedelta(days=7)
     
     progress_entries = Progress.query.filter(
-        Progress.user_id == CURRENT_USER_ID,
+        Progress.user_id == user_id,
         Progress.date >= since_date
     ).order_by(Progress.date.desc()).all()
     
@@ -1644,7 +1940,10 @@ def api_recent_progress():
 @app.route('/api/profile/enhanced_stats')
 def api_profile_enhanced_stats():
     try:
-        user_id = CURRENT_USER_ID
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
         today = date.today()
         
         # Dados básicos do perfil
@@ -1894,7 +2193,10 @@ def analyze_growth_trend(user_id):
 def api_time_analysis():
     """Análise temporal para o perfil"""
     try:
-        user_id = CURRENT_USER_ID
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
         patterns = get_time_patterns(user_id)
         return jsonify(patterns)
     except Exception as e:
@@ -1905,7 +2207,9 @@ def api_time_analysis():
 def api_profile_complete():
     """Dados completos do perfil para análise de IA"""
     try:
-        user_id = CURRENT_USER_ID
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
         
         # Obter dados básicos (usando a função existente)
         basic_stats = get_profile_stats(user_id)
@@ -1995,7 +2299,7 @@ def api_profile_complete():
                 'patterns': {},
                 'weekly_progress': [],
                 'annual_progress': 0,
-                'user_id': CURRENT_USER_ID
+                'user_id': user_id
             },
             'activities': [],
             'time_patterns': {},
@@ -2087,7 +2391,9 @@ def get_recent_activities_for_ai(user_id, limit=50):
 def api_ai_profile_analysis():
     """Endpoint otimizado para análise de IA"""
     try:
-        user_id = CURRENT_USER_ID
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
         
         # Dados para análise de IA
         ai_data = {
@@ -2151,7 +2457,7 @@ def api_health():
     try:
         # Verificar banco de dados
         user_count = User.query.count()
-        activity_count = Activity.query.filter_by(user_id=CURRENT_USER_ID).count()
+        activity_count = Activity.query.filter_by(user_id=get_current_user_id() or 1).count()
         
         return jsonify({
             'status': 'healthy',
@@ -2178,23 +2484,23 @@ def api_health():
 def create_sample_data():
     """Cria dados de exemplo para demonstração"""
     # Verificar se já existe usuário
-    user = User.query.get(CURRENT_USER_ID)
+    user = User.query.get(1)
     if not user:
-        user = User(id=CURRENT_USER_ID, username='demo', email='demo@example.com')
+        user = User(id=1, username='demo', email='demo@example.com')
         db.session.add(user)
         db.session.commit()
         
         # Criar categorias de exemplo
         categories = [
-            Category(name='Leitura', description='Livros e materiais de leitura', color='#3498db', icon='📚', user_id=CURRENT_USER_ID),
-            Category(name='Exercício', description='Atividades físicas', color='#2ecc71', icon='🏃', user_id=CURRENT_USER_ID),
-            Category(name='Estudo', description='Aprendizado e desenvolvimento', color='#9b59b6', icon='📖', user_id=CURRENT_USER_ID),
-            Category(name='Música', description='Prática musical', color='#e74c3c', icon='🎵', user_id=CURRENT_USER_ID),
-            Category(name='Lazer', description='Atividades de lazer e diversão', color='#f1c40f', icon='🎮', user_id=CURRENT_USER_ID),
-            Category(name='Finanças', description='Controle financeiro e investimentos', color='#1abc9c', icon='💰', user_id=CURRENT_USER_ID),
-            Category(name='Casa', description='Tarefas domésticas e organização', color='#d35400', icon='🏠', user_id=CURRENT_USER_ID),
-            Category(name='Carro', description='Manutenção e cuidados com veículo', color='#34495e', icon='🚗', user_id=CURRENT_USER_ID),
-            Category(name='Trabalho', description='Atividades profissionais', color='#8e44ad', icon='💼', user_id=CURRENT_USER_ID)
+            Category(name='Leitura', description='Livros e materiais de leitura', color='#3498db', icon='📚', user_id=1),
+            Category(name='Exercício', description='Atividades físicas', color='#2ecc71', icon='🏃', user_id=1),
+            Category(name='Estudo', description='Aprendizado e desenvolvimento', color='#9b59b6', icon='📖', user_id=1),
+            Category(name='Música', description='Prática musical', color='#e74c3c', icon='🎵', user_id=1),
+            Category(name='Lazer', description='Atividades de lazer e diversão', color='#f1c40f', icon='🎮', user_id=1),
+            Category(name='Finanças', description='Controle financeiro e investimentos', color='#1abc9c', icon='💰', user_id=1),
+            Category(name='Casa', description='Tarefas domésticas e organização', color='#d35400', icon='🏠', user_id=1),
+            Category(name='Carro', description='Manutenção e cuidados com veículo', color='#34495e', icon='🚗', user_id=1),
+            Category(name='Trabalho', description='Atividades profissionais', color='#8e44ad', icon='💼', user_id=1)
         ]
         
         for category in categories:
@@ -2207,7 +2513,7 @@ def create_sample_data():
             name='Ler Dom Casmurro',
             description='Ler o clássico da literatura brasileira',
             category_id=1,  # Leitura
-            user_id=CURRENT_USER_ID,
+            user_id=1,
             measurement_type='units',
             status='in_progress',
             target_value=300,
@@ -2219,7 +2525,7 @@ def create_sample_data():
             name='Estudar Flask',
             description='Aprender framework web Flask',
             category_id=3,  # Estudo
-            user_id=CURRENT_USER_ID,
+            user_id=1,
             measurement_type='percentage',
             status='in_progress',
             manual_percentage=25.0
@@ -2230,7 +2536,7 @@ def create_sample_data():
             name='Implementar sistema de gamificação',
             description='Desenvolver o sistema atual',
             category_id=3,  # Estudo
-            user_id=CURRENT_USER_ID,
+            user_id=1,
             measurement_type='boolean',
             status='completed',
             parent_activity_id=activity2.id
@@ -2242,7 +2548,7 @@ def create_sample_data():
             name='Leitor Ávido',
             description='Complete sua primeira atividade de leitura',
             points_required=50,
-            user_id=CURRENT_USER_ID
+            user_id=1
         )
         db.session.add(reward1)
 
@@ -2250,7 +2556,7 @@ def create_sample_data():
             name='Estudante Dedicado',
             description='Complete 10 horas de estudo',
             points_required=100,
-            user_id=CURRENT_USER_ID
+            user_id=1
         )
         db.session.add(reward2)
 
@@ -2259,7 +2565,7 @@ def create_sample_data():
         # Criar alguns progressos de exemplo
         progress1 = Progress(
             activity_id=activity1.id,
-            user_id=CURRENT_USER_ID,
+            user_id=1,
             date=date.today(),
             value=50,
             unit='páginas',
@@ -2269,7 +2575,7 @@ def create_sample_data():
 
         progress2 = Progress(
             activity_id=activity2.id,
-            user_id=CURRENT_USER_ID,
+            user_id=1,
             date=date.today(),
             value=25,
             unit='%',
@@ -2287,31 +2593,33 @@ def init_database():
             db.create_all()
             print("✅ Tabelas criadas/verificadas com sucesso!")
             
-            # Criar usuário demo se não existir
-            user = User.query.get(CURRENT_USER_ID)
-            if not user:
-                user = User(
-                    id=CURRENT_USER_ID, 
-                    username='demo', 
-                    email='demo@example.com'
+            # Criar usuários demo se não existirem
+            user1 = User.query.get(1)
+            if not user1:
+                user1 = User(
+                    id=1, 
+                    username='usuario1', 
+                    email='usuario1@exemplo.com'
                 )
-                db.session.add(user)
-                db.session.commit()
-                print("✅ Usuário demo criado!")
+                db.session.add(user1)
+                print("✅ Usuário 1 criado!")
                 
-                # Criar algumas categorias de exemplo
-                categories = [
-                    Category(name='Leitura', color='#3498db', icon='📚', user_id=CURRENT_USER_ID),
-                    Category(name='Exercício', color='#2ecc71', icon='🏃', user_id=CURRENT_USER_ID),
-                    Category(name='Estudo', color='#9b59b6', icon='📖', user_id=CURRENT_USER_ID),
-                ]
-                
-                for cat in categories:
-                    db.session.add(cat)
-                
-                db.session.commit()
-                print("✅ Dados de exemplo criados!")
+                # Criar dados de exemplo para usuário 1
+                create_sample_data_for_user(1)
             
+            user2 = User.query.get(2)
+            if not user2:
+                user2 = User(
+                    id=2, 
+                    username='usuario2', 
+                    email='usuario2@exemplo.com'
+                )
+                db.session.add(user2)
+                print("✅ Usuário 2 criado!")
+                # Usuário 2 começa sem dados
+                
+            db.session.commit()
+                
         except Exception as e:
             print(f"❌ Erro ao inicializar banco: {str(e)}")
 
@@ -2321,17 +2629,3 @@ init_database()
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-if __name__ == '__main__':
-    with app.app_context():
-        # Cria todas as tabelas (apenas se não existirem)
-        db.create_all()
-        
-        # Verifica se já tem dados para evitar duplicação
-        user_count = User.query.count()
-        if user_count == 0:
-            print("Banco vazio. Criando dados de exemplo...")
-            create_sample_data()
-        else:
-            print(f"Banco já contém {user_count} usuários. Mantendo dados existentes.")
-            
-    app.run(debug=True)

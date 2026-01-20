@@ -19,16 +19,50 @@
             <li><a href="{{ url_for('categories') }}" class="nav-link {% if request.path == '/categories' %}active{% endif %}"><i class="fas fa-folder"></i> Categorias</a></li>
             <li><a href="{{ url_for('activity_map') }}" class="nav-link {% if request.path == '/activity_map' %}active{% endif %}"><i class="fas fa-project-diagram"></i> Mapa de Atividades</a></li>
             <li><a href="{{ url_for('rewards') }}" class="nav-link {% if request.path == '/rewards' %}active{% endif %}"><i class="fas fa-gift"></i> Recompensas</a></li>
-            <li><a href="{{ url_for('profile') }}" class="nav-link {% if request.path == '/profile' %}active{% endif %}"><i class="fas fa-gift"></i> Perfil</a></li>
+            <li><a href="{{ url_for('profile') }}" class="nav-link {% if request.path == '/profile' %}active{% endif %}"><i class="fas fa-user"></i> Perfil</a></li>
             <li><a href="{{ url_for('history') }}" class="nav-link {% if request.path == '/history' %}active{% endif %}"><i class="fas fa-history"></i> Histórico</a></li>
         </ul>
+        <div class="nav-user">
+            {% if session.get('user_id') %}
+                <span class="user-info">Usuário {{ session.get('user_id') }}</span>
+                <button id="logout-btn" class="btn btn-outline btn-sm">Logout</button>
+                {% if request.path == '/' %}
+                    <button id="reset-db-btn" class="btn btn-danger btn-sm" title="Resetar banco de dados (apaga todas as atividades, categorias, etc.)">Resetar Banco</button>
+                {% endif %}
+            {% else %}
+                <button id="login-btn" class="btn btn-primary btn-sm">Login</button>
+            {% endif %}
+        </div>
     </nav>
 
     <main class="main-content">
         {% block content %}{% endblock %}
     </main>
 
+    <!-- Modal de Login -->
+    <div id="login-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Login</h3>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="username">Usuário:</label>
+                    <input type="text" id="username" required placeholder="Digite o nome de usuário">
+                </div>
+                <div class="form-group">
+                    <label for="password">Senha:</label>
+                    <input type="password" id="password" required placeholder="Digite a senha">
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Entrar</button>
+                    <button type="button" class="btn btn-outline" onclick="closeModal('login-modal')">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/login.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>
