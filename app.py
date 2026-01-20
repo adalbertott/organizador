@@ -2278,7 +2278,49 @@ def create_sample_data():
         db.session.add(progress2)
 
         db.session.commit()
+# ==================== INICIALIZAÇÃO DO BANCO ====================
 
+def init_database():
+    """Inicializa o banco de dados e cria tabelas"""
+    with app.app_context():
+        try:
+            db.create_all()
+            print("✅ Tabelas criadas/verificadas com sucesso!")
+            
+            # Criar usuário demo se não existir
+            user = User.query.get(CURRENT_USER_ID)
+            if not user:
+                user = User(
+                    id=CURRENT_USER_ID, 
+                    username='demo', 
+                    email='demo@example.com'
+                )
+                db.session.add(user)
+                db.session.commit()
+                print("✅ Usuário demo criado!")
+                
+                # Criar algumas categorias de exemplo
+                categories = [
+                    Category(name='Leitura', color='#3498db', icon='📚', user_id=CURRENT_USER_ID),
+                    Category(name='Exercício', color='#2ecc71', icon='🏃', user_id=CURRENT_USER_ID),
+                    Category(name='Estudo', color='#9b59b6', icon='📖', user_id=CURRENT_USER_ID),
+                ]
+                
+                for cat in categories:
+                    db.session.add(cat)
+                
+                db.session.commit()
+                print("✅ Dados de exemplo criados!")
+            
+        except Exception as e:
+            print(f"❌ Erro ao inicializar banco: {str(e)}")
+
+# Executar inicialização ao iniciar
+init_database()
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
 if __name__ == '__main__':
     with app.app_context():
         # Cria todas as tabelas (apenas se não existirem)
