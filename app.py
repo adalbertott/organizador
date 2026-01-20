@@ -3,12 +3,29 @@ from models import db, User, Category, Activity, Progress, Reward, ScheduledActi
 from datetime import datetime, date, timedelta
 import json
 import os
+import random
 from sqlalchemy import func, or_
 
 app = Flask(__name__)
-# Usando SQLite em vez de SQL Serverschedules = db.relationship('ScheduledActivity', backref='scheduled_activity', lazy=True, cascade="all, delete-orphan")
-basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'gamification.db')
+
+# Configuração para PostgreSQL no Render
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    # Render usa PostgreSQL com URL começando com postgres://
+    # SQLAlchemy precisa postgresql://
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_recycle': 300,
+        'pool_pre_ping': True,
+    }
+else:
+    # Fallback para SQLite local
+    basedir = os.path.abspath(os.path.dirname(__file__))
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'gamification.db')
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
@@ -208,6 +225,7 @@ def calculate_productivity_score(user_id):
     except Exception as e:
         print(f"Erro em calculate_productivity_score: {str(e)}")
         return 0
+
 def get_fallback_profile_data(user_id):
     """Dados de fallback quando não há dados reais"""
     return {
@@ -245,6 +263,7 @@ def get_fallback_profile_data(user_id):
         'annual_progress': round(((date.today() - date(date.today().year, 1, 1)).days / 365) * 100, 1),
         'user_id': user_id
     }
+
 # API Routes
 @app.route('/history')
 def history():
@@ -413,6 +432,7 @@ def api_category(category_id):
         db.session.delete(category)
         db.session.commit()
         return jsonify({'message': 'Categoria excluída com sucesso'})
+
 # No app.py
 @app.route('/api/profile/ai_analysis')
 def api_ai_analysis():
@@ -429,6 +449,7 @@ def api_ai_analysis():
         'patterns': patterns,
         'timestamp': datetime.utcnow().isoformat()
     })
+
 @app.route('/api/activities', methods=['GET', 'POST'])
 def api_activities():
     if request.method == 'POST':
@@ -504,7 +525,6 @@ def api_activities():
         })
     
     return jsonify(result)
-    # ... (código anterior permanece o mesmo)
 
 def get_profile_stats(user_id):
     """Obtém estatísticas completas do perfil do usuário"""
@@ -884,6 +904,7 @@ def calculate_consistency_score(user_id):
     except Exception as e:
         print(f"Erro em calculate_consistency_score: {str(e)}")
         return 0
+
 # API Routes existentes permanecem iguais...
 
 # Nova rota para dados de IA
@@ -1096,6 +1117,7 @@ def analyze_historical_patterns(historical_data):
         'consistency_score': round(consistency, 1),
         'trend': trend
     }
+
 @app.route('/api/activities/<int:activity_id>', methods=['GET', 'PUT', 'DELETE'])
 def api_activity(activity_id):
     activity = Activity.query.filter_by(id=activity_id, user_id=CURRENT_USER_ID).first_or_404()
@@ -1616,6 +1638,7 @@ def api_recent_progress():
         'date': p.date.isoformat(),
         'target_value': p.activity.target_value if p.activity else None
     } for p in progress_entries])
+
 # Adicione estas rotas ao app.py
 
 @app.route('/api/profile/enhanced_stats')
@@ -1768,6 +1791,7 @@ def analyze_time_patterns(user_id):
     except Exception as e:
         print(f"Erro em analyze_time_patterns: {str(e)}")
         return {'busiest_days': {}, 'preferred_times': {}}
+
 def get_activity_profile(user_id):
     """Cria um perfil de atividade do usuário"""
     activities = Activity.query.filter_by(user_id=user_id).all()
@@ -1864,7 +1888,8 @@ def analyze_growth_trend(user_id):
         return 'down'
     else:
         return 'stable'
-    # Rota para análise temporal
+
+# Rota para análise temporal
 @app.route('/api/profile/time_analysis')
 def api_time_analysis():
     """Análise temporal para o perfil"""
@@ -2012,6 +2037,7 @@ def get_current_streak(user_id):
     except Exception as e:
         print(f"Erro em get_current_streak: {str(e)}")
         return 0    
+
 def get_recent_activities_for_ai(user_id, limit=50):
     """Obtém atividades recentes formatadas para IA"""
     try:
@@ -2080,6 +2106,7 @@ def api_ai_profile_analysis():
     except Exception as e:
         print(f"Erro em api_ai_profile_analysis: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
 @app.route('/api/health/check')
 def api_health_check():
     """Verifica a saúde de todos os endpoints"""
@@ -2116,6 +2143,7 @@ def api_health_check():
         'results': results,
         'timestamp': datetime.utcnow().isoformat()
     })
+
 # Rota de verificação de saúde
 @app.route('/api/health')
 def api_health():

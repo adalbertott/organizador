@@ -60,7 +60,6 @@ class Activity(db.Model):
     
     children = db.relationship('Activity', backref=db.backref('parent', remote_side=[id]), lazy='dynamic')
     progress_entries = db.relationship('Progress', backref='activity', lazy=True, cascade="all, delete-orphan")
-    # ERRO: backref='scheduled_activity' está causando conflito de nomes
     schedules = db.relationship('ScheduledActivity', backref='activity', lazy=True, cascade="all, delete-orphan")
 
 class Progress(db.Model):
