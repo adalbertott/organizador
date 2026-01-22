@@ -413,8 +413,8 @@ def api_activities():
             'name': act.name,
             'description': act.description,
             'category_id': act.category_id,
-            'category_name': act.category.name,
-            'category_color': act.category.color,
+            'category_name': act.category.name if act.category else None,
+            'category_color': act.category.color if act.category else '#3498db',
             'status': act.status,
             'measurement_type': act.measurement_type,
             'target_value': act.target_value,
@@ -423,7 +423,7 @@ def api_activities():
             'progress': current_value if act.measurement_type == 'units' else progress,
             'progress_percentage': progress,
             'parent_activity_id': act.parent_activity_id,
-            'children_count': act.children.count()
+            'children_count': len(act.children)  # CORREÇÃO: len() em vez de .count()
         })
     
     return jsonify(result)
@@ -440,13 +440,23 @@ def api_activity(activity_id):
         progress = calculate_activity_progress(activity)
         current_value = get_current_progress_value(activity)
         
+        children_list = []
+        for child in activity.children:
+            child_progress = calculate_activity_progress(child)
+            children_list.append({
+                'id': child.id,
+                'name': child.name,
+                'status': child.status,
+                'progress': child_progress
+            })
+        
         return jsonify({
             'id': activity.id,
             'name': activity.name,
             'description': activity.description,
             'category_id': activity.category_id,
-            'category_name': activity.category.name,
-            'category_color': activity.category.color,
+            'category_name': activity.category.name if activity.category else None,
+            'category_color': activity.category.color if activity.category else '#3498db',
             'status': activity.status,
             'measurement_type': activity.measurement_type,
             'target_value': activity.target_value,
@@ -456,13 +466,9 @@ def api_activity(activity_id):
             'progress_percentage': progress,
             'parent_activity_id': activity.parent_activity_id,
             'parent_name': activity.parent.name if activity.parent else None,
-            'children': [{
-                'id': child.id,
-                'name': child.name,
-                'status': child.status,
-                'progress': calculate_activity_progress(child)
-            } for child in activity.children],
-            'created_at': activity.created_at.isoformat()
+            'children': children_list,
+            'children_count': len(activity.children),  # CORREÇÃO: len() em vez de .count()
+            'created_at': activity.created_at.isoformat() if activity.created_at else None
         })
     
     elif request.method == 'PUT':
@@ -516,10 +522,10 @@ def api_activities_hierarchy():
                     'id': child.id,
                     'name': child.name,
                     'status': child.status,
-                    'category_name': child.category.name,
-                    'category_color': child.category.color,
+                    'category_name': child.category.name if child.category else None,
+                    'category_color': child.category.color if child.category else '#3498db',
                     'progress': progress,
-                    'children_count': child.children.count(),
+                    'children_count': len(child.children),  # CORREÇÃO: len() em vez de .count()
                     'children': build_hierarchy(child.id)
                 }
                 result.append(activity_data)
@@ -676,7 +682,7 @@ def api_recent_progress():
     return jsonify([{
         'id': p.id,
         'activity_id': p.activity_id,
-        'activity_name': p.activity.name,
+        'activity_name': p.activity.name if p.activity else None,
         'value': p.value,
         'unit': p.unit,
         'notes': p.notes,
@@ -727,8 +733,8 @@ def api_schedules():
     return jsonify([{
         'id': s.id,
         'activity_id': s.activity_id,
-        'activity_name': s.activity.name,
-        'category_color': s.activity.category.color,
+        'activity_name': s.activity.name if s.activity else None,
+        'category_color': s.activity.category.color if s.activity and s.activity.category else '#3498db',
         'scheduled_date': s.scheduled_date.isoformat(),
         'scheduled_time': s.scheduled_time,
         'duration': s.duration
@@ -1551,15 +1557,16 @@ def get_time_patterns(user_id):
         thirty_days_ago = date.today() - timedelta(days=30)
         
         hourly_patterns = db.session.query(
-            func.strftime('%H', ScheduledActivity.scheduled_time).label('hour'),
+            ScheduledActivity.scheduled_time,
             func.count(ScheduledActivity.id).label('count')
         ).filter(
             ScheduledActivity.user_id == user_id,
-            ScheduledActivity.scheduled_date >= thirty_days_ago
-        ).group_by('hour').order_by('hour').all()
+            ScheduledActivity.scheduled_date >= thirty_days_ago,
+            ScheduledActivity.scheduled_time.isnot(None)
+        ).group_by(ScheduledActivity.scheduled_time).order_by(ScheduledActivity.scheduled_time).all()
         
         daily_patterns = db.session.query(
-            func.strftime('%w', ScheduledActivity.scheduled_date).label('day_of_week'),
+            func.extract('dow', ScheduledActivity.scheduled_date).label('day_of_week'),
             func.count(ScheduledActivity.id).label('count')
         ).filter(
             ScheduledActivity.user_id == user_id,
@@ -1585,8 +1592,8 @@ def get_time_patterns(user_id):
             })
         
         return {
-            'hourly_patterns': {str(h.hour): h.count for h in hourly_patterns},
-            'daily_patterns': {str(d.day_of_week): d.count for d in daily_patterns},
+            'hourly_patterns': {str(h.scheduled_time): h.count for h in hourly_patterns if h.scheduled_time},
+            'daily_patterns': {str(int(d.day_of_week)): d.count for d in daily_patterns},
             'weekly_progress': weekly_data,
             'recent_trends': {
                 'productivity_trend': 'up' if len(weekly_data) >= 2 and weekly_data[0]['activities_completed'] > weekly_data[1]['activities_completed'] else 'stable',
@@ -1694,7 +1701,7 @@ def api_profile_complete():
                     'busiest_time': '10:00',
                     'consistency_score': basic_stats.get('consistency_score', 0)
                 },
-                'weekly_progress': enhanced_stats.get('weekly', {}),
+                'weekly_progress': basic_stats.get('weekly_progress', []),
                 'annual_progress': annual_progress,
                 'user_id': user_id
             },
@@ -1759,7 +1766,7 @@ def get_time_period_analysis(user_id, period='week'):
         if activity:
             category = Category.query.get(activity.category_id)
             if category:
-                hours = schedule.duration / 60
+                hours = schedule.duration / 60 if schedule.duration else 0
                 category_hours[category.name] = category_hours.get(category.name, 0) + hours
     
     analysis = {
@@ -1903,7 +1910,7 @@ def api_profile_enhanced_stats():
         
         today = date.today()
         
-        basic_stats = api_profile_stats().get_json()
+        basic_stats = get_profile_stats(user_id)
         
         time_analysis = {
             'weekly': get_time_period_analysis(user_id, 'week'),
@@ -1993,14 +2000,14 @@ def api_profile_historical():
                 }
             
             daily_data[date_key]['scheduled_activities'] += 1
-            daily_data[date_key]['time_spent'] += schedule.duration
+            daily_data[date_key]['time_spent'] += schedule.duration if schedule.duration else 0
             
             activity = Activity.query.get(schedule.activity_id)
             if activity:
                 category = Category.query.get(activity.category_id)
                 if category:
                     cat_name = category.name
-                    daily_data[date_key]['categories'][cat_name] = daily_data[date_key]['categories'].get(cat_name, 0) + schedule.duration
+                    daily_data[date_key]['categories'][cat_name] = daily_data[date_key]['categories'].get(cat_name, 0) + (schedule.duration if schedule.duration else 0)
         
         historical_data = sorted(daily_data.values(), key=lambda x: x['date'])
         
