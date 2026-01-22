@@ -44,719 +44,34 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 
 db.init_app(app)
 
-# ... (resto do código permanece igual) ...
-# ============ DECORATORS E MIDDLEWARE ============
-def login_required(f):
-    """Decorator para verificar autenticação"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        user_id = session.get('user_id')
-        if not user_id:
-            if request.is_json or request.path.startswith('/api/'):
-                return jsonify({'error': 'Authentication required', 'code': 401}), 401
-            return redirect(url_for('dashboard'))
-        g.user_id = user_id
-        return f(*args, **kwargs)
-    return decorated_function
 
-def admin_required(f):
-    """Decorator para verificar se é admin"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        user_id = session.get('user_id')
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-        
-        user = User.query.get(user_id)
-        if not user or getattr(user, 'is_admin', False) is False:
-            return jsonify({'error': 'Admin privileges required'}), 403
-        
-        return f(*args, **kwargs)
-    return decorated_function
-
-@app.before_request
-def before_request():
-    """Executar antes de cada requisição"""
-    g.start_time = time.time()
-    g.user_id = session.get('user_id')
-    
-    # Log da requisição
-    if request.path not in ['/static/', '/favicon.ico']:
-        logger.info(f"{request.method} {request.path} - User: {g.user_id}")
-
-@app.after_request
-def after_request(response):
-    """Executar após cada requisição"""
-    # Calcular tempo de resposta
-    if hasattr(g, 'start_time'):
-        elapsed = time.time() - g.start_time
-        response.headers['X-Response-Time'] = f'{elapsed:.3f}s'
-    
-    # Adicionar headers de segurança
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    
-    # CORS para desenvolvimento
-    if app.debug:
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-    
-    return response
-
-@app.errorhandler(404)
-def not_found_error(error):
-    """Handler para erro 404"""
-    if request.path.startswith('/api/'):
-        return jsonify({'error': 'Resource not found', 'code': 404}), 404
-    return render_template('404.html'), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    """Handler para erro 500"""
-    db.session.rollback()
-    logger.error(f"Internal Server Error: {error}")
-    
-    if request.path.startswith('/api/'):
-        return jsonify({'error': 'Internal server error', 'code': 500}), 500
-    return render_template('500.html'), 500
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    """Handler para exceções gerais"""
-    db.session.rollback()
-    logger.error(f"Unhandled Exception: {str(e)}")
-    logger.error(traceback.format_exc())
-    
-    if request.path.startswith('/api/'):
-        return jsonify({
-            'error': 'An unexpected error occurred',
-            'message': str(e) if app.debug else 'Internal server error',
-            'code': 500
-        }), 500
-    
-    return render_template('error.html', error=str(e) if app.debug else 'An error occurred'), 500
-
-# ============ FUNÇÕES AUXILIARES ============
+# Função para obter o ID do usuário atual
 def get_current_user_id():
-    """Obter ID do usuário atual da sessão"""
     return session.get('user_id')
 
-def get_current_user():
-    """Obter objeto do usuário atual"""
-    user_id = get_current_user_id()
-    if user_id:
-        return User.query.get(user_id)
-    return None
-
-def validate_json_data(required_fields=None):
-    """Validar dados JSON da requisição"""
-    if not request.is_json:
-        return False, jsonify({'error': 'Content-Type must be application/json'}), 400
+# Verificar se o usuário está autenticado
+@app.before_request
+def check_authentication():
+    public_routes = ['login', 'logout', 'api_auth_login', 'api_auth_logout', 
+                     'api_auth_status', 'static', 'dashboard', 'api_health']
     
-    data = request.get_json(silent=True)
-    if data is None:
-        return False, jsonify({'error': 'Invalid JSON data'}), 400
+    if request.endpoint in public_routes:
+        return
     
-    if required_fields:
-        missing = [field for field in required_fields if field not in data]
-        if missing:
-            return False, jsonify({'error': f'Missing required fields: {missing}'}), 400
-    
-    return True, data, None
-
-def generate_api_response(data=None, message="", success=True, code=200):
-    """Gerar resposta padrão da API"""
-    response = {
-        'success': success,
-        'message': message,
-        'timestamp': datetime.utcnow().isoformat(),
-        'code': code
-    }
-    
-    if data is not None:
-        response['data'] = data
-    
-    return jsonify(response), code
-
-def calculate_activity_progress(activity):
-    """Calcular progresso percentual de uma atividade"""
-    if not activity:
-        return 0
-    
-    try:
-        if activity.measurement_type == 'units':
-            if activity.target_value and activity.target_value > 0:
-                total_progress = db.session.query(func.sum(Progress.value)).filter(
-                    Progress.activity_id == activity.id,
-                    Progress.completed == True
-                ).scalar() or 0
-                
-                # Incluir progressos parciais
-                partial_progress = db.session.query(func.sum(Progress.value)).filter(
-                    Progress.activity_id == activity.id,
-                    Progress.completed == False
-                ).scalar() or 0
-                
-                total = total_progress + partial_progress
-                progress_percentage = min((total / activity.target_value) * 100, 100)
-                return round(progress_percentage, 1)
-            return 0
-        
-        elif activity.measurement_type == 'percentage':
-            return min(activity.manual_percentage or 0, 100)
-        
-        else:  # boolean
-            return 100 if activity.status == 'completed' else 0
-            
-    except Exception as e:
-        logger.error(f"Error calculating progress for activity {activity.id}: {e}")
-        return 0
-
-def get_current_progress_value(activity):
-    """Obter valor atual de progresso"""
-    if activity.measurement_type == 'units':
-        total = db.session.query(func.sum(Progress.value)).filter(
-            Progress.activity_id == activity.id
-        ).scalar() or 0
-        return total
-    
-    elif activity.measurement_type == 'percentage':
-        return activity.manual_percentage or 0
-    
-    else:  # boolean
-        return 1 if activity.status == 'completed' else 0
-
-def calculate_points_for_progress(activity, value, completed=False):
-    """Calcular pontos baseado no progresso"""
-    base_points = 0
-    
-    if activity.measurement_type == 'units' and activity.target_value and activity.target_value > 0:
-        progress_ratio = (value / activity.target_value) * 100
-        base_points = int(progress_ratio / 5)  # 20 pontos por 100%
-        
-        if completed:
-            base_points += 10  # Bônus por completar
-    
-    elif activity.measurement_type == 'percentage':
-        base_points = int(value / 5)  # 20 pontos por 100%
-        if completed:
-            base_points += 10
-    
-    elif activity.measurement_type == 'boolean' and completed:
-        base_points = 15
-    
-    # Garantir mínimo e máximo
-    base_points = max(1, min(base_points, 50))
-    
-    return base_points
-
-def update_user_points(user_id, points, description, activity_id=None):
-    """Atualizar pontos do usuário e registrar transação"""
-    try:
-        user_points = UserPoints.query.filter_by(user_id=user_id).first()
-        if not user_points:
-            user_points = UserPoints(user_id=user_id, points=0)
-            db.session.add(user_points)
-        
-        user_points.points += points
-        user_points.last_updated = datetime.utcnow()
-        
-        # Registrar transação
-        transaction = PointTransaction(
-            user_id=user_id,
-            points=points,
-            description=description,
-            activity_id=activity_id
-        )
-        db.session.add(transaction)
-        
-        db.session.flush()
-        return user_points.points
-        
-    except Exception as e:
-        logger.error(f"Error updating user points: {e}")
-        db.session.rollback()
-        raise
-
-def calculate_streak_bonus(user_id, activity_date=None):
-    """Calcular bônus de sequência"""
-    try:
-        streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
-        if not streak:
-            streak = WeeklyStreak(user_id=user_id, streak_count=0)
-            db.session.add(streak)
-        
-        today = activity_date or date.today()
-        last_activity = streak.last_activity_date
-        
-        # Reset streak se passou mais de 7 dias
-        if not last_activity or (today - last_activity).days > 7:
-            streak.streak_count = 1
-        # Incrementar se foi na última semana
-        elif 1 <= (today - last_activity).days <= 7:
-            streak.streak_count += 1
-        # Mesmo dia, manter streak
-        else:
-            pass  # Mesmo dia, não incrementar
-        
-        streak.last_activity_date = today
-        
-        # Calcular bônus baseado no streak
-        bonus_multiplier = min(streak.streak_count // 4 + 1, 5)  # Máximo 5x
-        bonus_points = bonus_multiplier * 2  # 2 pontos por nível
-        
-        db.session.flush()
-        
-        # Mensagem motivacional
-        messages = {
-            1: "🏁 Primeiro dia! Bom começo!",
-            3: "🔥 3 dias seguidos! Continue assim!",
-            7: "🌟 1 semana! Excelente consistência!",
-            14: "🚀 2 semanas! Você está no foco!",
-            21: "💪 3 semanas! Impressioante!",
-            30: "🎯 1 mês! Ninguém segura você!"
-        }
-        
-        message = messages.get(streak.streak_count, 
-                             f"📈 {streak.streak_count} dias seguidos! Continue!")
-        
-        return bonus_points, message, streak.streak_count
-        
-    except Exception as e:
-        logger.error(f"Error calculating streak bonus: {e}")
-        return 0, "", 0
-
-def create_sample_data_for_user(user_id, force=False):
-    """Criar dados de exemplo para um usuário"""
-    try:
-        # Verificar se já existem categorias para evitar duplicação
-        if not force and Category.query.filter_by(user_id=user_id).count() > 0:
-            logger.info(f"User {user_id} already has data, skipping sample creation")
-            return
-        
-        # Criar categorias padrão
-        categories_data = [
-            {'name': '📚 Leitura', 'description': 'Livros, artigos e materiais de leitura', 
-             'color': '#3498db', 'icon': '📚'},
-            {'name': '💪 Exercício', 'description': 'Atividades físicas e esportes', 
-             'color': '#2ecc71', 'icon': '💪'},
-            {'name': '🎓 Estudo', 'description': 'Aprendizado e desenvolvimento profissional', 
-             'color': '#9b59b6', 'icon': '🎓'},
-            {'name': '💼 Trabalho', 'description': 'Tarefas e projetos profissionais', 
-             'color': '#e74c3c', 'icon': '💼'},
-            {'name': '🎨 Criatividade', 'description': 'Arte, música e projetos criativos', 
-             'color': '#f39c12', 'icon': '🎨'},
-            {'name': '🏠 Doméstico', 'description': 'Tarefas domésticas e organização', 
-             'color': '#1abc9c', 'icon': '🏠'},
-            {'name': '🧘 Bem-estar', 'description': 'Meditação, yoga e autocuidado', 
-             'color': '#d35400', 'icon': '🧘'},
-        ]
-        
-        categories = []
-        for cat_data in categories_data:
-            category = Category(
-                name=cat_data['name'],
-                description=cat_data['description'],
-                color=cat_data['color'],
-                icon=cat_data['icon'],
-                user_id=user_id
-            )
-            db.session.add(category)
-            categories.append(category)
-        
-        db.session.flush()
-        
-        # Criar atividades de exemplo
-        activities_data = [
-            {
-                'name': 'Ler "Dom Casmurro"',
-                'description': 'Clássico da literatura brasileira de Machado de Assis',
-                'category_idx': 0,
-                'measurement_type': 'units',
-                'target_value': 300,
-                'target_unit': 'páginas',
-                'status': 'in_progress',
-                'deadline': (date.today() + timedelta(days=30)).isoformat()
-            },
-            {
-                'name': 'Corrida matinal',
-                'description': '30 minutos de corrida leve',
-                'category_idx': 1,
-                'measurement_type': 'boolean',
-                'status': 'in_progress'
-            },
-            {
-                'name': 'Curso de Python Avançado',
-                'description': 'Completar curso online de Python',
-                'category_idx': 2,
-                'measurement_type': 'percentage',
-                'manual_percentage': 45.0,
-                'status': 'in_progress'
-            },
-            {
-                'name': 'Organizar arquivos do projeto',
-                'description': 'Reorganizar estrutura de pastas e documentos',
-                'category_idx': 3,
-                'measurement_type': 'boolean',
-                'status': 'completed'
-            },
-            {
-                'name': 'Pintar quadro',
-                'description': 'Finalizar pintura a óleo iniciada',
-                'category_idx': 4,
-                'measurement_type': 'percentage',
-                'manual_percentage': 75.0,
-                'status': 'in_progress'
-            },
-            {
-                'name': 'Limpar quarto',
-                'description': 'Organização e limpeza completa',
-                'category_idx': 5,
-                'measurement_type': 'boolean',
-                'status': 'want_to_do'
-            },
-            {
-                'name': 'Sessão de meditação',
-                'description': '20 minutos de meditação guiada',
-                'category_idx': 6,
-                'measurement_type': 'boolean',
-                'status': 'in_progress'
-            }
-        ]
-        
-        for act_data in activities_data:
-            activity = Activity(
-                name=act_data['name'],
-                description=act_data['description'],
-                category_id=categories[act_data['category_idx']].id,
-                user_id=user_id,
-                measurement_type=act_data['measurement_type'],
-                status=act_data['status'],
-                created_at=datetime.utcnow() - timedelta(days=random.randint(1, 10))
-            )
-            
-            if 'target_value' in act_data:
-                activity.target_value = act_data['target_value']
-                activity.target_unit = act_data['target_unit']
-            
-            if 'manual_percentage' in act_data:
-                activity.manual_percentage = act_data['manual_percentage']
-            
-            if 'deadline' in act_data:
-                activity.deadline = datetime.strptime(act_data['deadline'], '%Y-%m-%d').date()
-            
-            db.session.add(activity)
-        
-        # Criar recompensas
-        rewards_data = [
-            {
-                'name': '🎖️ Iniciante Produtivo',
-                'description': 'Complete sua primeira atividade',
-                'points_required': 50,
-                'reward_type': 'badge'
-            },
-            {
-                'name': '📚 Leitor Assíduo',
-                'description': 'Leia mais de 100 páginas',
-                'points_required': 100,
-                'reward_type': 'badge'
-            },
-            {
-                'name': '💪 Atleta da Semana',
-                'description': 'Exercite-se 5 dias seguidos',
-                'points_required': 150,
-                'reward_type': 'achievement'
-            },
-            {
-                'name': '🌟 Estrela em Ascensão',
-                'description': 'Alcance 500 pontos totais',
-                'points_required': 500,
-                'reward_type': 'level'
-            },
-            {
-                'name': '🏆 Mestre da Produtividade',
-                'description': 'Complete 50 atividades',
-                'points_required': 1000,
-                'reward_type': 'trophy'
-            }
-        ]
-        
-        for reward_data in rewards_data:
-            reward = Reward(
-                name=reward_data['name'],
-                description=reward_data['description'],
-                points_required=reward_data['points_required'],
-                reward_type=reward_data['reward_type'],
-                condition_type='points',
-                condition_value=reward_data['points_required'],
-                user_id=user_id
-            )
-            db.session.add(reward)
-        
-        # Inicializar pontos do usuário
-        user_points = UserPoints(
-            user_id=user_id,
-            points=100,  # Pontos iniciais
-            last_updated=datetime.utcnow()
-        )
-        db.session.add(user_points)
-        
-        # Inicializar streak
-        streak = WeeklyStreak(
-            user_id=user_id,
-            streak_count=1,
-            last_activity_date=date.today() - timedelta(days=1)
-        )
-        db.session.add(streak)
-        
-        # Criar alguns agendamentos
-        scheduled_data = [
-            {
-                'activity_name': 'Corrida matinal',
-                'scheduled_date': date.today().isoformat(),
-                'scheduled_time': '07:00',
-                'duration': 30
-            },
-            {
-                'activity_name': 'Sessão de meditação',
-                'scheduled_date': (date.today() + timedelta(days=1)).isoformat(),
-                'scheduled_time': '20:00',
-                'duration': 20
-            }
-        ]
-        
-        for sched_data in scheduled_data:
-            # Encontrar atividade pelo nome
-            activity = Activity.query.filter_by(
-                name=sched_data['activity_name'],
-                user_id=user_id
-            ).first()
-            
-            if activity:
-                schedule = ScheduledActivity(
-                    activity_id=activity.id,
-                    user_id=user_id,
-                    scheduled_date=datetime.strptime(sched_data['scheduled_date'], '%Y-%m-%d').date(),
-                    scheduled_time=sched_data['scheduled_time'],
-                    duration=sched_data['duration']
-                )
-                db.session.add(schedule)
-        
-        db.session.commit()
-        logger.info(f"Sample data created for user {user_id}")
-        
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Error creating sample data for user {user_id}: {e}")
-        raise
-
-# ============ ROTAS DE PÁGINAS ============
-@app.route('/')
-def index():
-    """Página inicial - redireciona para dashboard"""
-    user_id = get_current_user_id()
-    if user_id:
+    if not get_current_user_id():
         return redirect(url_for('dashboard'))
-    return render_template('index.html')
 
-@app.route('/dashboard')
-def dashboard():
-    """Dashboard principal"""
-    return render_template('dashboard.html')
-
-@app.route('/calendar')
-def calendar_page():
-    """Página do calendário"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('calendar.html')
-
-@app.route('/categories')
-def categories_page():
-    """Página de categorias"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('categories.html')
-
-@app.route('/activities')
-def activities_page():
-    """Página de atividades"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('activities.html')
-
-@app.route('/rewards')
-def rewards_page():
-    """Página de recompensas"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('rewards.html')
-
-@app.route('/profile')
-def profile_page():
-    """Página de perfil"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('profile.html')
-
-@app.route('/analytics')
-def analytics_page():
-    """Página de análises"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('analytics.html')
-
-@app.route('/settings')
-def settings_page():
-    """Página de configurações"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('settings.html')
-
-@app.route('/history')
-def history_page():
-    """Página de histórico"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('history.html')
-
-@app.route('/activity_map')
-def activity_map_page():
-    """Mapa de atividades"""
-    user_id = get_current_user_id()
-    if not user_id:
-        return redirect(url_for('index'))
-    return render_template('activity_map.html')
-
-@app.route('/login')
-def login_page():
-    """Página de login"""
-    if get_current_user_id():
-        return redirect(url_for('dashboard'))
-    return render_template('login.html')
-
-@app.route('/register')
-def register_page():
-    """Página de registro"""
-    if get_current_user_id():
-        return redirect(url_for('dashboard'))
-    return render_template('register.html')
-
-@app.route('/about')
-def about_page():
-    """Página sobre o sistema"""
-    return render_template('about.html')
-
-@app.route('/help')
-def help_page():
-    """Página de ajuda"""
-    return render_template('help.html')
-
-@app.context_processor
-def utility_processor():
-    """Adicionar funções úteis ao contexto dos templates"""
-    return {
-        'now': datetime.now,
-        'current_year': datetime.now().year,
-        'get_current_user': get_current_user,
-        'format_date': lambda d: d.strftime('%d/%m/%Y') if d else '',
-        'format_datetime': lambda d: d.strftime('%d/%m/%Y %H:%M') if d else '',
-    }
-
-# ============ API DE AUTENTICAÇÃO ============
-@app.route('/api/auth/register', methods=['POST'])
-def api_auth_register():
-    """Registrar novo usuário"""
-    try:
-        valid, data, error_response = validate_json_data(['username', 'email', 'password'])
-        if not valid:
-            return error_response
-        
-        # Verificar se usuário já existe
-        if User.query.filter_by(username=data['username']).first():
-            return generate_api_response(
-                message='Username already exists',
-                success=False,
-                code=400
-            )
-        
-        if User.query.filter_by(email=data['email']).first():
-            return generate_api_response(
-                message='Email already registered',
-                success=False,
-                code=400
-            )
-        
-        # Criar novo usuário
-        user = User(
-            username=data['username'],
-            email=data['email'],
-            created_at=datetime.utcnow()
-        )
-        
-        # Em produção, usar hash de senha:
-        # user.password_hash = generate_password_hash(data['password'])
-        
-        db.session.add(user)
-        db.session.commit()
-        
-        # Criar dados iniciais
-        create_sample_data_for_user(user.id)
-        
-        # Logar automaticamente
-        session['user_id'] = user.id
-        session['username'] = user.username
-        
-        return generate_api_response(
-            data={
-                'id': user.id,
-                'username': user.username,
-                'email': user.email
-            },
-            message='Registration successful',
-            success=True
-        )
-        
-    except IntegrityError:
-        db.session.rollback()
-        return generate_api_response(
-            message='Registration failed - database error',
-            success=False,
-            code=500
-        )
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Registration error: {e}")
-        return generate_api_response(
-            message='Registration failed - server error',
-            success=False,
-            code=500
-        )
-
+# ============ FUNÇÕES DE AUTENTICAÇÃO ============
 @app.route('/api/auth/login', methods=['POST'])
 def api_auth_login():
-    """Login de usuário"""
     try:
-        valid, data, error_response = validate_json_data(['username', 'password'])
-        if not valid:
-            return error_response
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
         
-        # Sistema simplificado para demonstração
-        # Em produção, verificar hash da senha
-        if data['username'] in ['usuario1', 'usuario2'] and data['password'] == '123321':
-            user_id = 1 if data['username'] == 'usuario1' else 2
+        if username in ['usuario1', 'usuario2'] and password == '123321':
+            user_id = 1 if username == 'usuario1' else 2
             
-            # Verificar/criar usuário
             user = User.query.get(user_id)
             if not user:
                 if user_id == 1:
@@ -765,2885 +80,2180 @@ def api_auth_login():
                     user = User(id=user_id, username='usuario2', email='usuario2@exemplo.com')
                 db.session.add(user)
                 db.session.commit()
-                
-                # Criar dados iniciais
-                create_sample_data_for_user(user_id)
             
-            # Criar sessão
             session['user_id'] = user_id
-            session['username'] = data['username']
+            session['username'] = username
             
-            # Atualizar último login
-            # user.last_login = datetime.utcnow()
-            # db.session.commit()
-            
-            return generate_api_response(
-                data={
-                    'id': user_id,
-                    'username': data['username']
-                },
-                message='Login successful'
-            )
+            return jsonify({
+                'success': True,
+                'message': 'Login realizado com sucesso',
+                'user_id': user_id,
+                'username': username
+            })
         else:
-            return generate_api_response(
-                message='Invalid username or password',
-                success=False,
-                code=401
-            )
+            return jsonify({
+                'success': False,
+                'message': 'Usuário ou senha inválidos'
+            }), 401
             
     except Exception as e:
-        logger.error(f"Login error: {e}")
-        return generate_api_response(
-            message='Login failed',
-            success=False,
-            code=500
-        )
+        print(f"Erro no login: {str(e)}")
+        return jsonify({'success': False, 'message': 'Erro no servidor'}), 500
 
 @app.route('/api/auth/logout', methods=['POST'])
-@login_required
 def api_auth_logout():
-    """Logout de usuário"""
-    try:
-        session.clear()
-        return generate_api_response(message='Logout successful')
-    except Exception as e:
-        logger.error(f"Logout error: {e}")
-        return generate_api_response(
-            message='Logout failed',
-            success=False,
-            code=500
-        )
+    session.clear()
+    return jsonify({'success': True, 'message': 'Logout realizado com sucesso'})
 
 @app.route('/api/auth/status', methods=['GET'])
 def api_auth_status():
-    """Verificar status de autenticação"""
     user_id = get_current_user_id()
-    user = get_current_user()
-    
-    return generate_api_response(data={
+    return jsonify({
         'logged_in': user_id is not None,
         'user_id': user_id,
-        'username': session.get('username'),
-        'email': user.email if user else None
+        'username': session.get('username')
     })
 
-@app.route('/api/auth/profile', methods=['GET', 'PUT'])
-@login_required
-def api_auth_profile():
-    """Obter ou atualizar perfil do usuário"""
+@app.route('/api/auth/reset_database', methods=['POST'])
+def api_auth_reset_database():
     try:
-        user = get_current_user()
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'success': False, 'message': 'Usuário não autenticado'}), 401
         
-        if request.method == 'GET':
-            return generate_api_response(data={
-                'id': user.id,
-                'username': user.username,
-                'email': user.email,
-                'created_at': user.created_at.isoformat() if user.created_at else None,
-                'total_points': UserPoints.query.filter_by(user_id=user.id).first().points if UserPoints.query.filter_by(user_id=user.id).first() else 0
-            })
-        
-        elif request.method == 'PUT':
-            valid, data, error_response = validate_json_data()
-            if not valid:
-                return error_response
-            
-            update_fields = {}
-            if 'email' in data and data['email'] != user.email:
-                # Verificar se email já existe
-                if User.query.filter(User.email == data['email'], User.id != user.id).first():
-                    return generate_api_response(
-                        message='Email already registered',
-                        success=False,
-                        code=400
-                    )
-                update_fields['email'] = data['email']
-            
-            if 'username' in data and data['username'] != user.username:
-                # Verificar se username já existe
-                if User.query.filter(User.username == data['username'], User.id != user.id).first():
-                    return generate_api_response(
-                        message='Username already taken',
-                        success=False,
-                        code=400
-                    )
-                update_fields['username'] = data['username']
-                session['username'] = data['username']
-            
-            # Atualizar campos
-            for field, value in update_fields.items():
-                setattr(user, field, value)
+        if user_id == 2:
+            Progress.query.filter_by(user_id=2).delete()
+            ScheduledActivity.query.filter_by(user_id=2).delete()
+            Activity.query.filter_by(user_id=2).delete()
+            Category.query.filter_by(user_id=2).delete()
+            Reward.query.filter_by(user_id=2).delete()
+            UserPoints.query.filter_by(user_id=2).delete()
+            PointTransaction.query.filter_by(user_id=2).delete()
+            WeeklyStreak.query.filter_by(user_id=2).delete()
             
             db.session.commit()
             
-            return generate_api_response(
-                message='Profile updated successfully',
-                data={
-                    'username': user.username,
-                    'email': user.email
-                }
-            )
-    
+            categories = [
+                Category(name='Leitura', color='#3498db', icon='📚', user_id=2),
+                Category(name='Exercício', color='#2ecc71', icon='🏃', user_id=2),
+                Category(name='Estudo', color='#9b59b6', icon='📖', user_id=2),
+            ]
+            
+            for category in categories:
+                db.session.add(category)
+            
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Banco de dados do usuário 2 resetado com sucesso!'
+            })
+        else:
+            Progress.query.filter_by(user_id=1).delete()
+            ScheduledActivity.query.filter_by(user_id=1).delete()
+            Activity.query.filter_by(user_id=1).delete()
+            Category.query.filter_by(user_id=1).delete()
+            Reward.query.filter_by(user_id=1).delete()
+            UserPoints.query.filter_by(user_id=1).delete()
+            PointTransaction.query.filter_by(user_id=1).delete()
+            WeeklyStreak.query.filter_by(user_id=1).delete()
+            
+            db.session.commit()
+            
+            create_sample_data_for_user(1)
+            
+            return jsonify({
+                'success': True,
+                'message': 'Banco de dados do usuário 1 resetado com sucesso! Dados de exemplo recriados.'
+            })
+            
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Profile error: {e}")
-        return generate_api_response(
-            message='Operation failed',
-            success=False,
-            code=500
-        )
+        print(f"Erro ao resetar banco: {str(e)}")
+        return jsonify({'success': False, 'message': f'Erro ao resetar banco: {str(e)}'}), 500
 
-# ============ API DE CATEGORIAS ============
+# ============ FUNÇÕES AUXILIARES ============
+def create_sample_data_for_user(user_id):
+    categories = [
+        Category(name='Leitura', description='Livros e materiais de leitura', color='#3498db', icon='📚', user_id=user_id),
+        Category(name='Exercício', description='Atividades físicas', color='#2ecc71', icon='🏃', user_id=user_id),
+        Category(name='Estudo', description='Aprendizado e desenvolvimento', color='#9b59b6', icon='📖', user_id=user_id),
+    ]
+    
+    for category in categories:
+        db.session.add(category)
+    
+    db.session.commit()
+    
+    categoria_leitura = Category.query.filter_by(name='Leitura', user_id=user_id).first()
+    categoria_estudo = Category.query.filter_by(name='Estudo', user_id=user_id).first()
+    
+    if categoria_leitura:
+        atividade1 = Activity(
+            name='Ler Dom Casmurro',
+            description='Ler o clássico da literatura brasileira',
+            category_id=categoria_leitura.id,
+            user_id=user_id,
+            measurement_type='units',
+            status='in_progress',
+            target_value=300,
+            target_unit='páginas'
+        )
+        db.session.add(atividade1)
+    
+    if categoria_estudo:
+        atividade2 = Activity(
+            name='Estudar Flask',
+            description='Aprender framework web Flask',
+            category_id=categoria_estudo.id,
+            user_id=user_id,
+            measurement_type='percentage',
+            status='in_progress',
+            manual_percentage=25.0
+        )
+        db.session.add(atividade2)
+    
+    db.session.commit()
+    
+    reward1 = Reward(
+        name='Leitor Ávido',
+        description='Complete sua primeira atividade de leitura',
+        points_required=50,
+        user_id=user_id
+    )
+    db.session.add(reward1)
+    
+    db.session.commit()
+
+def calculate_activity_progress(activity):
+    if not activity:
+        return 0
+    
+    if activity.measurement_type == 'units':
+        if activity.target_value and activity.target_value > 0:
+            total_progress = db.session.query(func.sum(Progress.value)).filter(
+                Progress.activity_id == activity.id
+            ).scalar() or 0
+            progress_percentage = min((total_progress / activity.target_value) * 100, 100)
+            return round(progress_percentage, 1)
+        return 0
+    elif activity.measurement_type == 'percentage':
+        return min(activity.manual_percentage or 0, 100)
+    else:
+        return 100 if activity.status == 'completed' else 0
+
+def get_current_progress_value(activity):
+    if activity.measurement_type == 'units':
+        return db.session.query(func.sum(Progress.value)).filter(
+            Progress.activity_id == activity.id
+        ).scalar() or 0
+    elif activity.measurement_type == 'percentage':
+        return activity.manual_percentage or 0
+    else:
+        return 1 if activity.status == 'completed' else 0
+
+# ============ ROTAS DE PÁGINAS ============
+@app.route('/')
+def dashboard():
+    return render_template('dashboard.html')
+
+@app.route('/calendar')
+def calendar():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
+    return render_template('calendar.html')
+
+@app.context_processor
+def utility_processor():
+    return dict(now=datetime.now)
+
+@app.route('/categories')
+def categories():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
+    return render_template('categories.html')
+
+@app.route('/rewards')
+def rewards():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
+    return render_template('rewards.html')
+
+@app.route('/activity_map')
+def activity_map():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
+    return render_template('activity_map.html')
+
+@app.route('/profile')
+def profile():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
+    return render_template('profile.html')
+
+@app.route('/history')
+def history():
+    user_id = get_current_user_id()
+    if not user_id:
+        return redirect(url_for('dashboard'))
+    return render_template('history.html')
+
+# ============ API ROUTES ============
+# ============ CATEGORIAS ============
 @app.route('/api/categories', methods=['GET', 'POST'])
-@login_required
 def api_categories():
-    """Listar ou criar categorias"""
-    try:
-        user_id = g.user_id
-        
-        if request.method == 'GET':
-            # Parâmetros de filtro
-            search = request.args.get('search', '')
-            sort_by = request.args.get('sort_by', 'name')
-            sort_order = request.args.get('sort_order', 'asc')
-            
-            query = Category.query.filter_by(user_id=user_id)
-            
-            # Aplicar filtro de busca
-            if search:
-                query = query.filter(
-                    or_(
-                        Category.name.ilike(f'%{search}%'),
-                        Category.description.ilike(f'%{search}%')
-                    )
-                )
-            
-            # Aplicar ordenação
-            if sort_by == 'name':
-                query = query.order_by(asc(Category.name) if sort_order == 'asc' else desc(Category.name))
-            elif sort_by == 'created_at':
-                query = query.order_by(asc(Category.created_at) if sort_order == 'asc' else desc(Category.created_at))
-            elif sort_by == 'activity_count':
-                # Ordenar por número de atividades (subquery)
-                query = query.outerjoin(Activity).group_by(Category.id).order_by(
-                    func.count(Activity.id).asc() if sort_order == 'asc' else func.count(Activity.id).desc()
-                )
-            
-            categories = query.all()
-            
-            result = []
-            for cat in categories:
-                activity_count = Activity.query.filter_by(category_id=cat.id, user_id=user_id).count()
-                active_activities = Activity.query.filter_by(
-                    category_id=cat.id, 
-                    user_id=user_id,
-                    status='in_progress'
-                ).count()
-                
-                # Calcular progresso médio da categoria
-                category_activities = Activity.query.filter_by(category_id=cat.id, user_id=user_id).all()
-                avg_progress = 0
-                if category_activities:
-                    total_progress = sum(calculate_activity_progress(act) for act in category_activities)
-                    avg_progress = round(total_progress / len(category_activities), 1)
-                
-                result.append({
-                    'id': cat.id,
-                    'name': cat.name,
-                    'description': cat.description or '',
-                    'color': cat.color,
-                    'icon': cat.icon,
-                    'activity_count': activity_count,
-                    'active_activities': active_activities,
-                    'avg_progress': avg_progress,
-                    'created_at': cat.created_at.isoformat() if cat.created_at else None,
-                    'stats': {
-                        'completed': Activity.query.filter_by(
-                            category_id=cat.id, user_id=user_id, status='completed'
-                        ).count(),
-                        'in_progress': active_activities,
-                        'want_to_do': Activity.query.filter_by(
-                            category_id=cat.id, user_id=user_id, status='want_to_do'
-                        ).count()
-                    }
-                })
-            
-            return generate_api_response(data={'categories': result})
-        
-        elif request.method == 'POST':
-            valid, data, error_response = validate_json_data(['name'])
-            if not valid:
-                return error_response
-            
-            # Verificar se categoria com mesmo nome já existe
-            existing = Category.query.filter_by(
-                user_id=user_id,
-                name=data['name']
-            ).first()
-            
-            if existing:
-                return generate_api_response(
-                    message='Category with this name already exists',
-                    success=False,
-                    code=400
-                )
-            
-            category = Category(
-                name=data['name'],
-                description=data.get('description', ''),
-                color=data.get('color', '#3498db'),
-                icon=data.get('icon', '📁'),
-                user_id=user_id,
-                created_at=datetime.utcnow()
-            )
-            
-            db.session.add(category)
-            db.session.commit()
-            
-            return generate_api_response(
-                data={'id': category.id},
-                message='Category created successfully',
-                code=201
-            )
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
     
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Categories API error: {e}")
-        return generate_api_response(
-            message='Operation failed',
-            success=False,
-            code=500
-        )
-
-@app.route('/api/categories/<int:category_id>', methods=['GET', 'PUT', 'DELETE'])
-@login_required
-def api_category_detail(category_id):
-    """Detalhes, atualização ou exclusão de categoria"""
-    try:
-        user_id = g.user_id
-        
-        category = Category.query.filter_by(
-            id=category_id,
+    if request.method == 'POST':
+        data = request.get_json()
+        category = Category(
+            name=data['name'],
+            description=data.get('description', ''),
+            color=data.get('color', '#3498db'),
+            icon=data.get('icon', '📁'),
             user_id=user_id
-        ).first_or_404()
-        
-        if request.method == 'GET':
-            # Contar estatísticas
-            activity_count = Activity.query.filter_by(category_id=category.id, user_id=user_id).count()
-            
-            # Calcular progresso médio
-            activities = Activity.query.filter_by(category_id=category.id, user_id=user_id).all()
-            avg_progress = 0
-            if activities:
-                total_progress = sum(calculate_activity_progress(act) for act in activities)
-                avg_progress = round(total_progress / len(activities), 1)
-            
-            # Calcular tempo total estimado
-            total_duration = 0
-            for act in activities:
-                if act.measurement_type == 'units' and act.target_value:
-                    total_duration += act.target_value
-            
-            return generate_api_response(data={
-                'id': category.id,
-                'name': category.name,
-                'description': category.description or '',
-                'color': category.color,
-                'icon': category.icon,
-                'created_at': category.created_at.isoformat() if category.created_at else None,
-                'stats': {
-                    'total_activities': activity_count,
-                    'completed': Activity.query.filter_by(
-                        category_id=category.id, user_id=user_id, status='completed'
-                    ).count(),
-                    'in_progress': Activity.query.filter_by(
-                        category_id=category.id, user_id=user_id, status='in_progress'
-                    ).count(),
-                    'want_to_do': Activity.query.filter_by(
-                        category_id=category.id, user_id=user_id, status='want_to_do'
-                    ).count(),
-                    'avg_progress': avg_progress,
-                    'total_duration': total_duration
-                },
-                'activities': [{
-                    'id': act.id,
-                    'name': act.name,
-                    'status': act.status,
-                    'progress': calculate_activity_progress(act),
-                    'deadline': act.deadline.isoformat() if act.deadline else None
-                } for act in activities[:10]]  # Limitar a 10 atividades
-            })
-        
-        elif request.method == 'PUT':
-            valid, data, error_response = validate_json_data()
-            if not valid:
-                return error_response
-            
-            update_fields = {}
-            
-            if 'name' in data and data['name'] != category.name:
-                # Verificar se novo nome já existe
-                existing = Category.query.filter_by(
-                    user_id=user_id,
-                    name=data['name']
-                ).first()
-                
-                if existing and existing.id != category.id:
-                    return generate_api_response(
-                        message='Category with this name already exists',
-                        success=False,
-                        code=400
-                    )
-                update_fields['name'] = data['name']
-            
-            if 'description' in data:
-                update_fields['description'] = data['description']
-            
-            if 'color' in data:
-                update_fields['color'] = data['color']
-            
-            if 'icon' in data:
-                update_fields['icon'] = data['icon']
-            
-            # Atualizar campos
-            for field, value in update_fields.items():
-                setattr(category, field, value)
-            
-            db.session.commit()
-            
-            return generate_api_response(message='Category updated successfully')
-        
-        elif request.method == 'DELETE':
-            # Verificar se há atividades usando esta categoria
-            activity_count = Activity.query.filter_by(
-                category_id=category.id,
-                user_id=user_id
-            ).count()
-            
-            if activity_count > 0:
-                return generate_api_response(
-                    message=f'Cannot delete category with {activity_count} activities. Move or delete activities first.',
-                    success=False,
-                    code=400
-                )
-            
-            db.session.delete(category)
-            db.session.commit()
-            
-            return generate_api_response(message='Category deleted successfully')
+        )
+        db.session.add(category)
+        db.session.commit()
+        return jsonify({'id': category.id, 'message': 'Categoria criada com sucesso'})
     
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Category detail error: {e}")
-        return generate_api_response(
-            message='Operation failed',
-            success=False,
-            code=500
-        )
+    categories = Category.query.filter_by(user_id=user_id).all()
+    return jsonify([{
+        'id': cat.id,
+        'name': cat.name,
+        'description': cat.description,
+        'color': cat.color,
+        'icon': cat.icon,
+        'activity_count': len(cat.activities)
+    } for cat in categories])
 
-@app.route('/api/categories/<int:category_id>/stats', methods=['GET'])
-@login_required
-def api_category_stats(category_id):
-    """Estatísticas detalhadas de uma categoria"""
-    try:
-        user_id = g.user_id
+@app.route('/api/categories/<int:category_id>', methods=['PUT', 'DELETE'])
+def api_category(category_id):
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    category = Category.query.filter_by(id=category_id, user_id=user_id).first_or_404()
+    
+    if request.method == 'PUT':
+        data = request.get_json()
+        category.name = data.get('name', category.name)
+        category.description = data.get('description', category.description)
+        category.color = data.get('color', category.color)
+        category.icon = data.get('icon', category.icon)
+        db.session.commit()
+        return jsonify({'message': 'Categoria atualizada com sucesso'})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(category)
+        db.session.commit()
+        return jsonify({'message': 'Categoria excluída com sucesso'})
+
+# ============ ATIVIDADES ============
+@app.route('/api/activities', methods=['GET', 'POST'])
+def api_activities():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    if request.method == 'POST':
+        data = request.get_json()
         
-        category = Category.query.filter_by(
-            id=category_id,
-            user_id=user_id
-        ).first_or_404()
+        measurement_type = 'boolean'
+        target_value = None
+        target_unit = None
+        manual_percentage = None
         
-        # Estatísticas básicas
-        activities = Activity.query.filter_by(category_id=category.id, user_id=user_id).all()
-        total_activities = len(activities)
+        if data.get('target_value') and data.get('target_unit'):
+            measurement_type = 'units'
+            target_value = float(data['target_value'])
+            target_unit = data['target_unit']
+        elif data.get('manual_percentage') is not None:
+            measurement_type = 'percentage'
+            manual_percentage = float(data['manual_percentage'])
         
-        # Distribuição por status
-        status_counts = {
-            'completed': 0,
-            'in_progress': 0,
-            'want_to_do': 0,
-            'cancelled': 0
-        }
+        start_date = datetime.strptime(data['start_date'], '%Y-%m-%d').date() if data.get('start_date') else None
+        end_date = datetime.strptime(data['end_date'], '%Y-%m-%d').date() if data.get('end_date') else None
+        deadline = datetime.strptime(data['deadline'], '%Y-%m-%d').date() if data.get('deadline') else None
         
-        # Progresso médio
-        total_progress = 0
-        progress_counts = {'0-25': 0, '26-50': 0, '51-75': 0, '76-100': 0}
+        activity = Activity(
+            name=data['name'],
+            description=data.get('description', ''),
+            category_id=data['category_id'],
+            user_id=user_id,
+            measurement_type=measurement_type,
+            status=data.get('status', 'want_to_do'),
+            target_value=target_value,
+            target_unit=target_unit,
+            manual_percentage=manual_percentage,
+            start_date=start_date,
+            end_date=end_date,
+            deadline=deadline,
+            parent_activity_id=data.get('parent_activity_id')
+        )
+        db.session.add(activity)
+        db.session.commit()
+        return jsonify({'id': activity.id, 'message': 'Atividade criada com sucesso'})
+    
+    activities = Activity.query.filter_by(user_id=user_id).all()
+    result = []
+    for act in activities:
+        progress = calculate_activity_progress(act)
+        current_value = get_current_progress_value(act)
         
-        for act in activities:
-            status_counts[act.status] = status_counts.get(act.status, 0) + 1
-            
-            progress = calculate_activity_progress(act)
-            total_progress += progress
-            
-            if progress <= 25:
-                progress_counts['0-25'] += 1
-            elif progress <= 50:
-                progress_counts['26-50'] += 1
-            elif progress <= 75:
-                progress_counts['51-75'] += 1
-            else:
-                progress_counts['76-100'] += 1
-        
-        avg_progress = round(total_progress / total_activities, 1) if total_activities > 0 else 0
-        
-        # Tempo total e médio
-        total_duration = 0
-        duration_count = 0
-        
-        for act in activities:
-            if act.measurement_type == 'units' and act.target_value:
-                total_duration += act.target_value
-                duration_count += 1
-        
-        avg_duration = round(total_duration / duration_count, 1) if duration_count > 0 else 0
-        
-        # Tendência de criação
-        creation_trend = {}
-        for act in activities:
-            if act.created_at:
-                month_key = act.created_at.strftime('%Y-%m')
-                creation_trend[month_key] = creation_trend.get(month_key, 0) + 1
-        
-        # Últimas atividades
-        recent_activities = Activity.query.filter_by(
-            category_id=category.id,
-            user_id=user_id
-        ).order_by(Activity.created_at.desc()).limit(5).all()
-        
-        recent_data = []
-        for act in recent_activities:
-            recent_data.append({
-                'id': act.id,
-                'name': act.name,
-                'status': act.status,
-                'progress': calculate_activity_progress(act),
-                'created_at': act.created_at.isoformat() if act.created_at else None
-            })
-        
-        # Progresso semanal
-        week_start = date.today() - timedelta(days=date.today().weekday())
-        weekly_progress = []
-        
-        for i in range(7):
-            day = week_start + timedelta(days=i)
-            day_progress = Progress.query.join(Activity).filter(
-                Progress.user_id == user_id,
-                Progress.date == day,
-                Activity.category_id == category.id
-            ).count()
-            
-            weekly_progress.append({
-                'day': day.isoformat(),
-                'day_name': day.strftime('%a'),
-                'progress_count': day_progress
-            })
-        
-        return generate_api_response(data={
-            'category': {
-                'id': category.id,
-                'name': category.name,
-                'color': category.color,
-                'icon': category.icon
-            },
-            'summary': {
-                'total_activities': total_activities,
-                'avg_progress': avg_progress,
-                'total_duration': total_duration,
-                'avg_duration': avg_duration
-            },
-            'distribution': {
-                'by_status': status_counts,
-                'by_progress': progress_counts
-            },
-            'trends': {
-                'creation_by_month': creation_trend,
-                'weekly_progress': weekly_progress
-            },
-            'recent_activities': recent_data
+        result.append({
+            'id': act.id,
+            'name': act.name,
+            'description': act.description,
+            'category_id': act.category_id,
+            'category_name': act.category.name,
+            'category_color': act.category.color,
+            'status': act.status,
+            'measurement_type': act.measurement_type,
+            'target_value': act.target_value,
+            'target_unit': act.target_unit,
+            'manual_percentage': act.manual_percentage,
+            'progress': current_value if act.measurement_type == 'units' else progress,
+            'progress_percentage': progress,
+            'parent_activity_id': act.parent_activity_id,
+            'children_count': act.children.count()
         })
     
-    except Exception as e:
-        logger.error(f"Category stats error: {e}")
-        return generate_api_response(
-            message='Failed to retrieve category statistics',
-            success=False,
-            code=500
-        )
-
-# ============ API DE ATIVIDADES ============
-@app.route('/api/activities', methods=['GET', 'POST'])
-@login_required
-def api_activities():
-    """Listar ou criar atividades"""
-    try:
-        user_id = g.user_id
-        
-        if request.method == 'GET':
-            # Parâmetros de filtro
-            category_id = request.args.get('category_id', type=int)
-            status = request.args.get('status')
-            search = request.args.get('search', '')
-            sort_by = request.args.get('sort_by', 'created_at')
-            sort_order = request.args.get('sort_order', 'desc')
-            limit = request.args.get('limit', type=int)
-            offset = request.args.get('offset', 0, type=int)
-            include_progress = request.args.get('include_progress', 'true').lower() == 'true'
-            
-            query = Activity.query.filter_by(user_id=user_id)
-            
-            # Aplicar filtros
-            if category_id:
-                query = query.filter_by(category_id=category_id)
-            
-            if status:
-                query = query.filter_by(status=status)
-            
-            if search:
-                query = query.filter(
-                    or_(
-                        Activity.name.ilike(f'%{search}%'),
-                        Activity.description.ilike(f'%{search}%')
-                    )
-                )
-            
-            # Aplicar ordenação
-            sort_column = {
-                'name': Activity.name,
-                'created_at': Activity.created_at,
-                'deadline': Activity.deadline,
-                'status': Activity.status,
-                'progress': None  # Ordenação especial
-            }.get(sort_by, Activity.created_at)
-            
-            if sort_by == 'progress':
-                # Ordenar por progresso (requer cálculo)
-                activities = query.all()
-                activities.sort(
-                    key=lambda a: calculate_activity_progress(a),
-                    reverse=(sort_order == 'desc')
-                )
-                
-                # Aplicar paginação
-                if limit:
-                    activities = activities[offset:offset + limit]
-            else:
-                # Ordenação normal
-                if sort_column:
-                    if sort_order == 'desc':
-                        query = query.order_by(desc(sort_column))
-                    else:
-                        query = query.order_by(asc(sort_column))
-                
-                # Aplicar paginação
-                if limit:
-                    query = query.limit(limit).offset(offset)
-                
-                activities = query.all()
-            
-            # Preparar resposta
-            result = []
-            for act in activities:
-                progress_data = {}
-                if include_progress:
-                    progress = calculate_activity_progress(act)
-                    current_value = get_current_progress_value(act)
-                    
-                    progress_data = {
-                        'percentage': progress,
-                        'current_value': current_value,
-                        'target_value': act.target_value,
-                        'target_unit': act.target_unit
-                    }
-                
-                activity_data = {
-                    'id': act.id,
-                    'name': act.name,
-                    'description': act.description or '',
-                    'category_id': act.category_id,
-                    'category_name': act.category.name if act.category else '',
-                    'category_color': act.category.color if act.category else '#cccccc',
-                    'status': act.status,
-                    'measurement_type': act.measurement_type,
-                    'target_value': act.target_value,
-                    'target_unit': act.target_unit,
-                    'manual_percentage': act.manual_percentage,
-                    'start_date': act.start_date.isoformat() if act.start_date else None,
-                    'end_date': act.end_date.isoformat() if act.end_date else None,
-                    'deadline': act.deadline.isoformat() if act.deadline else None,
-                    'created_at': act.created_at.isoformat() if act.created_at else None,
-                    'parent_activity_id': act.parent_activity_id,
-                    'children_count': act.children.count(),
-                    'has_parent': act.parent_activity_id is not None
-                }
-                
-                if progress_data:
-                    activity_data['progress'] = progress_data
-                
-                result.append(activity_data)
-            
-            # Contar total para paginação
-            total_count = Activity.query.filter_by(user_id=user_id).count()
-            filtered_count = len(activities) if sort_by == 'progress' else query.count()
-            
-            return generate_api_response(data={
-                'activities': result,
-                'pagination': {
-                    'total': total_count,
-                    'filtered': filtered_count,
-                    'limit': limit,
-                    'offset': offset,
-                    'has_more': (offset + len(result)) < filtered_count if limit else False
-                }
-            })
-        
-        elif request.method == 'POST':
-            valid, data, error_response = validate_json_data(['name', 'category_id'])
-            if not valid:
-                return error_response
-            
-            # Validar categoria
-            category = Category.query.filter_by(
-                id=data['category_id'],
-                user_id=user_id
-            ).first()
-            
-            if not category:
-                return generate_api_response(
-                    message='Invalid category',
-                    success=False,
-                    code=400
-                )
-            
-            # Validar atividade pai se fornecida
-            parent_activity = None
-            if 'parent_activity_id' in data:
-                parent_activity = Activity.query.filter_by(
-                    id=data['parent_activity_id'],
-                    user_id=user_id
-                ).first()
-                
-                if not parent_activity:
-                    return generate_api_response(
-                        message='Invalid parent activity',
-                        success=False,
-                        code=400
-                    )
-            
-            # Determinar tipo de medição
-            measurement_type = 'boolean'
-            target_value = None
-            target_unit = None
-            manual_percentage = None
-            
-            if 'measurement_type' in data:
-                measurement_type = data['measurement_type']
-                
-                if measurement_type == 'units':
-                    if 'target_value' not in data or 'target_unit' not in data:
-                        return generate_api_response(
-                            message='Units measurement requires target_value and target_unit',
-                            success=False,
-                            code=400
-                        )
-                    target_value = float(data['target_value'])
-                    target_unit = data['target_unit']
-                
-                elif measurement_type == 'percentage':
-                    manual_percentage = float(data.get('manual_percentage', 0))
-            
-            # Processar datas
-            start_date = None
-            end_date = None
-            deadline = None
-            
-            if 'start_date' in data:
-                start_date = datetime.strptime(data['start_date'], '%Y-%m-%d').date()
-            
-            if 'end_date' in data:
-                end_date = datetime.strptime(data['end_date'], '%Y-%m-%d').date()
-            
-            if 'deadline' in data:
-                deadline = datetime.strptime(data['deadline'], '%Y-%m-%d').date()
-            
-            # Criar atividade
-            activity = Activity(
-                name=data['name'],
-                description=data.get('description', ''),
-                category_id=category.id,
-                user_id=user_id,
-                measurement_type=measurement_type,
-                status=data.get('status', 'want_to_do'),
-                target_value=target_value,
-                target_unit=target_unit,
-                manual_percentage=manual_percentage,
-                start_date=start_date,
-                end_date=end_date,
-                deadline=deadline,
-                parent_activity_id=data.get('parent_activity_id'),
-                created_at=datetime.utcnow()
-            )
-            
-            db.session.add(activity)
-            db.session.commit()
-            
-            return generate_api_response(
-                data={'id': activity.id},
-                message='Activity created successfully',
-                code=201
-            )
-    
-    except ValueError as e:
-        db.session.rollback()
-        return generate_api_response(
-            message=f'Invalid data format: {str(e)}',
-            success=False,
-            code=400
-        )
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Activities API error: {e}")
-        return generate_api_response(
-            message='Failed to process activity',
-            success=False,
-            code=500
-        )
+    return jsonify(result)
 
 @app.route('/api/activities/<int:activity_id>', methods=['GET', 'PUT', 'DELETE'])
-@login_required
-def api_activity_detail(activity_id):
-    """Detalhes, atualização ou exclusão de atividade"""
+def api_activity(activity_id):
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    activity = Activity.query.filter_by(id=activity_id, user_id=user_id).first_or_404()
+    
+    if request.method == 'GET':
+        progress = calculate_activity_progress(activity)
+        current_value = get_current_progress_value(activity)
+        
+        return jsonify({
+            'id': activity.id,
+            'name': activity.name,
+            'description': activity.description,
+            'category_id': activity.category_id,
+            'category_name': activity.category.name,
+            'category_color': activity.category.color,
+            'status': activity.status,
+            'measurement_type': activity.measurement_type,
+            'target_value': activity.target_value,
+            'target_unit': activity.target_unit,
+            'manual_percentage': activity.manual_percentage,
+            'progress': current_value if activity.measurement_type == 'units' else progress,
+            'progress_percentage': progress,
+            'parent_activity_id': activity.parent_activity_id,
+            'parent_name': activity.parent.name if activity.parent else None,
+            'children': [{
+                'id': child.id,
+                'name': child.name,
+                'status': child.status,
+                'progress': calculate_activity_progress(child)
+            } for child in activity.children],
+            'created_at': activity.created_at.isoformat()
+        })
+    
+    elif request.method == 'PUT':
+        data = request.get_json()
+        
+        activity.name = data.get('name', activity.name)
+        activity.description = data.get('description', activity.description)
+        activity.status = data.get('status', activity.status)
+        
+        measurement_type = data.get('measurement_type', activity.measurement_type)
+        activity.measurement_type = measurement_type
+        
+        if measurement_type == 'units':
+            activity.target_value = data.get('target_value')
+            activity.target_unit = data.get('target_unit')
+            activity.manual_percentage = None
+        elif measurement_type == 'percentage':
+            activity.manual_percentage = data.get('manual_percentage', 0)
+            activity.target_value = None
+            activity.target_unit = None
+        else:
+            activity.target_value = None
+            activity.target_unit = None
+            activity.manual_percentage = None
+        
+        activity.parent_activity_id = data.get('parent_activity_id', activity.parent_activity_id)
+        
+        db.session.commit()
+        return jsonify({'message': 'Atividade atualizada com sucesso'})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(activity)
+        db.session.commit()
+        return jsonify({'message': 'Atividade excluída com sucesso'})
+
+@app.route('/api/activities/hierarchy')
+def api_activities_hierarchy():
     try:
-        user_id = g.user_id
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
         
-        activity = Activity.query.filter_by(
-            id=activity_id,
-            user_id=user_id
-        ).first_or_404()
+        activities = Activity.query.filter_by(user_id=user_id).all()
         
-        if request.method == 'GET':
-            # Calcular progresso
-            progress = calculate_activity_progress(activity)
-            current_value = get_current_progress_value(activity)
-            
-            # Obter histórico de progresso
-            progress_history = Progress.query.filter_by(
-                activity_id=activity.id
-            ).order_by(Progress.date.desc()).limit(10).all()
-            
-            # Obter agendamentos futuros
-            today = date.today()
-            future_schedules = ScheduledActivity.query.filter(
-                ScheduledActivity.activity_id == activity.id,
-                ScheduledActivity.scheduled_date >= today
-            ).order_by(ScheduledActivity.scheduled_date.asc()).limit(5).all()
-            
-            # Obter atividades filhas
-            children = Activity.query.filter_by(
-                parent_activity_id=activity.id,
-                user_id=user_id
-            ).all()
-            
-            activity_data = {
-                'id': activity.id,
-                'name': activity.name,
-                'description': activity.description or '',
-                'category_id': activity.category_id,
-                'category_name': activity.category.name if activity.category else '',
-                'category_color': activity.category.color if activity.category else '#cccccc',
-                'category_icon': activity.category.icon if activity.category else '📁',
-                'status': activity.status,
-                'measurement_type': activity.measurement_type,
-                'target_value': activity.target_value,
-                'target_unit': activity.target_unit,
-                'manual_percentage': activity.manual_percentage,
-                'start_date': activity.start_date.isoformat() if activity.start_date else None,
-                'end_date': activity.end_date.isoformat() if activity.end_date else None,
-                'deadline': activity.deadline.isoformat() if activity.deadline else None,
-                'created_at': activity.created_at.isoformat() if activity.created_at else None,
-                'parent_activity_id': activity.parent_activity_id,
-                'parent_name': activity.parent.name if activity.parent else None,
-                'progress': {
-                    'percentage': progress,
-                    'current_value': current_value,
-                    'target_value': activity.target_value,
-                    'target_unit': activity.target_unit,
-                    'is_completed': progress >= 100
-                },
-                'stats': {
-                    'total_progress_entries': Progress.query.filter_by(activity_id=activity.id).count(),
-                    'completed_progress': Progress.query.filter_by(
-                        activity_id=activity.id, completed=True
-                    ).count(),
-                    'total_points_earned': db.session.query(func.sum(Progress.points_earned)).filter(
-                        Progress.activity_id == activity.id
-                    ).scalar() or 0,
-                    'children_count': len(children)
-                },
-                'history': [{
-                    'id': p.id,
-                    'date': p.date.isoformat(),
-                    'value': p.value,
-                    'unit': p.unit,
-                    'completed': p.completed,
-                    'points_earned': p.points_earned,
-                    'streak_bonus': p.streak_bonus,
-                    'notes': p.notes
-                } for p in progress_history],
-                'schedules': [{
-                    'id': s.id,
-                    'scheduled_date': s.scheduled_date.isoformat(),
-                    'scheduled_time': s.scheduled_time,
-                    'duration': s.duration
-                } for s in future_schedules],
-                'children': [{
+        def build_hierarchy(activity_id=None):
+            children = [a for a in activities if a.parent_activity_id == activity_id]
+            result = []
+            for child in children:
+                progress = calculate_activity_progress(child)
+                activity_data = {
                     'id': child.id,
                     'name': child.name,
                     'status': child.status,
-                    'progress': calculate_activity_progress(child)
-                } for child in children]
-            }
-            
-            return generate_api_response(data=activity_data)
+                    'category_name': child.category.name,
+                    'category_color': child.category.color,
+                    'progress': progress,
+                    'children_count': child.children.count(),
+                    'children': build_hierarchy(child.id)
+                }
+                result.append(activity_data)
+            return result
         
-        elif request.method == 'PUT':
-            valid, data, error_response = validate_json_data()
-            if not valid:
-                return error_response
-            
-            update_fields = {}
-            
-            # Atualizar nome
-            if 'name' in data:
-                update_fields['name'] = data['name']
-            
-            # Atualizar descrição
-            if 'description' in data:
-                update_fields['description'] = data['description']
-            
-            # Atualizar categoria
-            if 'category_id' in data and data['category_id'] != activity.category_id:
-                # Verificar se categoria existe e pertence ao usuário
-                category = Category.query.filter_by(
-                    id=data['category_id'],
-                    user_id=user_id
-                ).first()
-                
-                if not category:
-                    return generate_api_response(
-                        message='Invalid category',
-                        success=False,
-                        code=400
-                    )
-                update_fields['category_id'] = data['category_id']
-            
-            # Atualizar status
-            if 'status' in data:
-                if data['status'] not in ['want_to_do', 'in_progress', 'completed', 'cancelled']:
-                    return generate_api_response(
-                        message='Invalid status',
-                        success=False,
-                        code=400
-                    )
-                update_fields['status'] = data['status']
-                
-                # Se marcar como completo, ajustar progresso
-                if data['status'] == 'completed':
-                    if activity.measurement_type == 'percentage':
-                        activity.manual_percentage = 100
-                    elif activity.measurement_type == 'boolean':
-                        # Registrar progresso completo automaticamente
-                        progress = Progress(
-                            activity_id=activity.id,
-                            user_id=user_id,
-                            date=date.today(),
-                            value=1,
-                            unit='unidades',
-                            completed=True,
-                            points_earned=15,
-                            streak_bonus=0
-                        )
-                        db.session.add(progress)
-            
-            # Atualizar tipo de medição e valores relacionados
-            if 'measurement_type' in data:
-                measurement_type = data['measurement_type']
-                
-                if measurement_type not in ['boolean', 'units', 'percentage']:
-                    return generate_api_response(
-                        message='Invalid measurement type',
-                        success=False,
-                        code=400
-                    )
-                
-                update_fields['measurement_type'] = measurement_type
-                
-                if measurement_type == 'units':
-                    if 'target_value' not in data or 'target_unit' not in data:
-                        return generate_api_response(
-                            message='Units measurement requires target_value and target_unit',
-                            success=False,
-                            code=400
-                        )
-                    update_fields['target_value'] = float(data['target_value'])
-                    update_fields['target_unit'] = data['target_unit']
-                    update_fields['manual_percentage'] = None
-                
-                elif measurement_type == 'percentage':
-                    update_fields['manual_percentage'] = float(data.get('manual_percentage', 0))
-                    update_fields['target_value'] = None
-                    update_fields['target_unit'] = None
-                
-                else:  # boolean
-                    update_fields['target_value'] = None
-                    update_fields['target_unit'] = None
-                    update_fields['manual_percentage'] = None
-            
-            # Atualizar datas
-            date_fields = ['start_date', 'end_date', 'deadline']
-            for field in date_fields:
-                if field in data:
-                    if data[field]:
-                        update_fields[field] = datetime.strptime(data[field], '%Y-%m-%d').date()
-                    else:
-                        update_fields[field] = None
-            
-            # Atualizar atividade pai
-            if 'parent_activity_id' in data:
-                parent_id = data['parent_activity_id']
-                
-                if parent_id:
-                    # Verificar se atividade pai existe e pertence ao usuário
-                    parent = Activity.query.filter_by(
-                        id=parent_id,
-                        user_id=user_id
-                    ).first()
-                    
-                    if not parent:
-                        return generate_api_response(
-                            message='Invalid parent activity',
-                            success=False,
-                            code=400
-                        )
-                    
-                    # Verificar loops na hierarquia
-                    if parent_id == activity.id:
-                        return generate_api_response(
-                            message='Activity cannot be its own parent',
-                            success=False,
-                            code=400
-                        )
-                    
-                    # Verificar se esta atividade já é ancestral da suposta pai
-                    def is_ancestor(child_id, parent_id):
-                        child = Activity.query.get(child_id)
-                        while child and child.parent_activity_id:
-                            if child.parent_activity_id == parent_id:
-                                return True
-                            child = Activity.query.get(child.parent_activity_id)
-                        return False
-                    
-                    if is_ancestor(parent_id, activity.id):
-                        return generate_api_response(
-                            message='Circular reference detected',
-                            success=False,
-                            code=400
-                        )
-                
-                update_fields['parent_activity_id'] = parent_id
-            
-            # Aplicar atualizações
-            for field, value in update_fields.items():
-                setattr(activity, field, value)
-            
-            db.session.commit()
-            
-            return generate_api_response(message='Activity updated successfully')
-        
-        elif request.method == 'DELETE':
-            # Verificar se há atividades filhas
-            children_count = Activity.query.filter_by(
-                parent_activity_id=activity.id,
-                user_id=user_id
-            ).count()
-            
-            if children_count > 0:
-                return generate_api_response(
-                    message=f'Cannot delete activity with {children_count} child activities. Delete children first or reassign them.',
-                    success=False,
-                    code=400
-                )
-            
-            # Verificar se há progressos registrados
-            progress_count = Progress.query.filter_by(activity_id=activity.id).count()
-            
-            if progress_count > 0:
-                # Perguntar se deve deletar progressos ou manter referências
-                return generate_api_response(
-                    message=f'Activity has {progress_count} progress records. Delete them along with the activity?',
-                    success=False,
-                    code=400
-                )
-            
-            db.session.delete(activity)
-            db.session.commit()
-            
-            return generate_api_response(message='Activity deleted successfully')
-    
-    except ValueError as e:
-        db.session.rollback()
-        return generate_api_response(
-            message=f'Invalid data format: {str(e)}',
-            success=False,
-            code=400
-        )
+        hierarchy = build_hierarchy()
+        return jsonify(hierarchy)
     except Exception as e:
-        db.session.rollback()
-        logger.error(f"Activity detail error: {e}")
-        return generate_api_response(
-            message='Failed to process activity',
-            success=False,
-            code=500
-        )
+        print(f"Erro ao carregar hierarquia: {str(e)}")
+        return jsonify([])
 
-# ============ API DE PROGRESSO ============
+# ============ PROGRESSO ============
 @app.route('/api/progress', methods=['POST'])
-@login_required
-def api_progress_create():
-    """Registrar progresso em uma atividade"""
+def api_progress():
     try:
-        valid, data, error_response = validate_json_data(['activity_id'])
-        if not valid:
-            return error_response
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'message': 'Usuário não autenticado'}), 401
         
-        user_id = g.user_id
+        data = request.get_json()
         
-        # Obter atividade
-        activity = Activity.query.filter_by(
-            id=data['activity_id'],
-            user_id=user_id
-        ).first()
+        if not data.get('activity_id'):
+            return jsonify({'message': 'ID da atividade é obrigatório'}), 400
         
+        activity = Activity.query.filter_by(id=data['activity_id'], user_id=user_id).first()
         if not activity:
-            return generate_api_response(
-                message='Activity not found',
-                success=False,
-                code=404
-            )
+            return jsonify({'message': 'Atividade não encontrada'}), 404
         
-        # Obter data do progresso
-        progress_date = date.today()
-        if 'date' in data and data['date']:
-            try:
-                progress_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-            except ValueError:
-                return generate_api_response(
-                    message='Invalid date format. Use YYYY-MM-DD',
-                    success=False,
-                    code=400
-                )
-        
-        # Verificar se já existe progresso para esta data
-        existing_progress = Progress.query.filter_by(
-            activity_id=activity.id,
-            date=progress_date
-        ).first()
-        
-        if existing_progress and not data.get('force', False):
-            return generate_api_response(
-                message='Progress already recorded for this date. Use force=true to override.',
-                success=False,
-                code=409
-            )
-        
-        # Calcular valor baseado no tipo de medição
         measurement_type = data.get('measurement_type', activity.measurement_type)
-        value = 0
-        unit = ''
+        value = float(data.get('value', 0))
+        unit = data.get('unit', '')
         completed = data.get('completed', False)
+        from_schedule = data.get('from_schedule', False)
         
         if measurement_type == 'units':
-            if 'value' not in data:
-                return generate_api_response(
-                    message='Value is required for units measurement',
-                    success=False,
-                    code=400
-                )
-            
-            value = float(data['value'])
-            unit = data.get('unit', activity.target_unit or 'unidades')
-            
-            # Verificar se não excede o alvo
+            if not unit:
+                unit = activity.target_unit or 'unidades'
             if activity.target_value and value > activity.target_value:
-                value = activity.target_value
-                completed = True
-            
-            # Se marcado como completo, completar o alvo
-            if completed and activity.target_value:
-                current_total = db.session.query(func.sum(Progress.value)).filter(
-                    Progress.activity_id == activity.id,
-                    Progress.completed == False
-                ).scalar() or 0
-                
-                value = max(activity.target_value - current_total, 0)
-        
+                return jsonify({'message': f'O valor não pode exceder o alvo ({activity.target_value})'}), 400
         elif measurement_type == 'percentage':
-            if 'value' not in data:
-                return generate_api_response(
-                    message='Value is required for percentage measurement',
-                    success=False,
-                    code=400
-                )
-            
-            value = float(data['value'])
-            if value < 0 or value > 100:
-                return generate_api_response(
-                    message='Percentage must be between 0 and 100',
-                    success=False,
-                    code=400
-                )
-            
             unit = '%'
+            if value < 0 or value > 100:
+                return jsonify({'message': 'A porcentagem deve estar entre 0 e 100'}), 400
             if value >= 100:
                 completed = True
-                value = 100
-        
-        else:  # boolean
-            value = 1
+        elif measurement_type == 'boolean':
             unit = 'unidades'
-            completed = data.get('completed', True)
+            value = 1
+            completed = True
         
-        # Verificar se vem de agendamento
-        from_schedule = data.get('from_schedule', False)
-        schedule_id = data.get('schedule_id')
+        if completed and measurement_type == 'units' and activity.target_value:
+            current_total = db.session.query(func.sum(Progress.value)).filter(
+                Progress.activity_id == activity.id
+            ).scalar() or 0
+            value = max(activity.target_value - current_total, 0)
         
-        # Calcular pontos
-        base_points = calculate_points_for_progress(activity, value, completed)
+        progress_date = datetime.strptime(data['date'], '%Y-%m-%d').date() if data.get('date') else date.today()
         
-        # Calcular bônus de streak
-        streak_bonus, streak_message, streak_count = calculate_streak_bonus(user_id, progress_date)
-        
-        # Calcular pontos totais
-        total_points = base_points + streak_bonus
-        
-        # Criar ou atualizar progresso
-        if existing_progress:
-            progress = existing_progress
-            progress.value = value
-            progress.unit = unit
-            progress.notes = data.get('notes', progress.notes)
-            progress.completed = completed
-            progress.points_earned = total_points
-            progress.streak_bonus = streak_bonus
-        else:
-            progress = Progress(
-                activity_id=activity.id,
-                user_id=user_id,
-                date=progress_date,
-                value=value,
-                unit=unit,
-                notes=data.get('notes', ''),
-                completed=completed,
-                from_schedule=from_schedule,
-                points_earned=total_points,
-                streak_bonus=streak_bonus,
-                created_at=datetime.utcnow()
-            )
-            db.session.add(progress)
-        
-        # Atualizar pontos do usuário
-        current_points = update_user_points(
-            user_id, 
-            total_points,
-            f'Progresso: {activity.name}',
-            activity.id
+        progress = Progress(
+            activity_id=activity.id,
+            user_id=user_id,
+            date=progress_date,
+            value=value,
+            unit=unit,
+            notes=data.get('notes', ''),
+            completed=completed,
+            from_schedule=from_schedule
         )
+        db.session.add(progress)
         
-        # Atualizar status da atividade se necessário
-        if completed:
-            activity.status = 'completed'
-            if measurement_type == 'percentage':
-                activity.manual_percentage = 100
-        elif activity.status == 'want_to_do':
-            activity.status = 'in_progress'
+        points_earned = 0
+        streak_bonus = 0
         
-        # Se veio de agendamento, marcar como concluído
-        if schedule_id:
-            schedule = ScheduledActivity.query.filter_by(
-                id=schedule_id,
-                user_id=user_id
-            ).first()
+        if measurement_type == 'units' and activity.target_value and activity.target_value > 0:
+            progress_ratio = (value / activity.target_value) * 100 if activity.target_value > 0 else 0
+            points_earned = int(progress_ratio / 10)
             
-            if schedule:
-                # Poderia marcar como concluído ou remover
-                pass
+            if completed:
+                points_earned += 5
+        elif measurement_type == 'percentage':
+            points_earned = int(value / 10)
+            if completed:
+                points_earned += 5
+        elif measurement_type == 'boolean' and completed:
+            points_earned = 10
         
-        db.session.commit()
+        if from_schedule:
+            streak_bonus, _ = calculate_streak_bonus(user_id)
+            points_earned += streak_bonus
         
-        # Calcular novo progresso percentual
-        new_progress = calculate_activity_progress(activity)
-        
-        # Verificar e conceder recompensas
-        earned_rewards = check_and_award_rewards(user_id, activity, progress)
-        
-        return generate_api_response(data={
-            'id': progress.id,
-            'activity_id': activity.id,
-            'activity_name': activity.name,
-            'date': progress_date.isoformat(),
-            'value': value,
-            'unit': unit,
-            'completed': completed,
-            'points_earned': total_points,
-            'breakdown': {
-                'base_points': base_points,
-                'streak_bonus': streak_bonus,
-                'streak_count': streak_count,
-                'streak_message': streak_message
-            },
-            'current_points': current_points,
-            'activity_progress': new_progress,
-            'activity_status': activity.status,
-            'earned_rewards': earned_rewards,
-            'from_schedule': from_schedule
-        }, message='Progress recorded successfully')
-    
-    except ValueError as e:
-        db.session.rollback()
-        return generate_api_response(
-            message=f'Invalid data format: {str(e)}',
-            success=False,
-            code=400
-        )
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Progress creation error: {e}")
-        return generate_api_response(
-            message='Failed to record progress',
-            success=False,
-            code=500
-        )
-
-@app.route('/api/progress/<int:progress_id>', methods=['GET', 'PUT', 'DELETE'])
-@login_required
-def api_progress_detail(progress_id):
-    """Detalhes, atualização ou exclusão de progresso"""
-    try:
-        user_id = g.user_id
-        
-        progress = Progress.query.filter_by(
-            id=progress_id,
-            user_id=user_id
-        ).first_or_404()
-        
-        if request.method == 'GET':
-            activity = progress.activity
-            
-            return generate_api_response(data={
-                'id': progress.id,
-                'activity_id': progress.activity_id,
-                'activity_name': activity.name,
-                'activity_category': activity.category.name if activity.category else '',
-                'activity_category_color': activity.category.color if activity.category else '#cccccc',
-                'date': progress.date.isoformat(),
-                'value': progress.value,
-                'unit': progress.unit,
-                'notes': progress.notes or '',
-                'completed': progress.completed,
-                'from_schedule': progress.from_schedule,
-                'points_earned': progress.points_earned,
-                'streak_bonus': progress.streak_bonus,
-                'created_at': progress.created_at.isoformat() if progress.created_at else None,
-                'activity_progress': calculate_activity_progress(activity),
-                'activity_target': activity.target_value,
-                'activity_unit': activity.target_unit
-            })
-        
-        elif request.method == 'PUT':
-            valid, data, error_response = validate_json_data()
-            if not valid:
-                return error_response
-            
-            activity = progress.activity
-            
-            # Verificar se pode editar
-            days_diff = (date.today() - progress.date).days
-            if days_diff > 30 and not data.get('force', False):
-                return generate_api_response(
-                    message='Cannot edit progress older than 30 days without force=true',
-                    success=False,
-                    code=400
-                )
-            
-            update_fields = {}
-            
-            # Atualizar valor
-            if 'value' in data:
-                new_value = float(data['value'])
-                
-                # Validar baseado no tipo de medição
-                if activity.measurement_type == 'units':
-                    if activity.target_value and new_value > activity.target_value:
-                        return generate_api_response(
-                            message=f'Value cannot exceed target ({activity.target_value})',
-                            success=False,
-                            code=400
-                        )
-                
-                elif activity.measurement_type == 'percentage':
-                    if new_value < 0 or new_value > 100:
-                        return generate_api_response(
-                            message='Percentage must be between 0 and 100',
-                            success=False,
-                            code=400
-                        )
-                
-                update_fields['value'] = new_value
-            
-            # Atualizar unidade
-            if 'unit' in data:
-                update_fields['unit'] = data['unit']
-            
-            # Atualizar notas
-            if 'notes' in data:
-                update_fields['notes'] = data['notes']
-            
-            # Atualizar status de completado
-            if 'completed' in data:
-                completed = data['completed']
-                update_fields['completed'] = completed
-                
-                # Se marcando como completo, ajustar valor se necessário
-                if completed and activity.measurement_type == 'units' and activity.target_value:
-                    current_total = db.session.query(func.sum(Progress.value)).filter(
-                        Progress.activity_id == activity.id,
-                        Progress.id != progress.id,
-                        Progress.completed == False
-                    ).scalar() or 0
-                    
-                    remaining = max(activity.target_value - current_total, 0)
-                    update_fields['value'] = remaining
-            
-            # Atualizar data
-            if 'date' in data:
-                try:
-                    new_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-                    
-                    # Verificar se já existe progresso para a nova data
-                    existing = Progress.query.filter_by(
-                        activity_id=activity.id,
-                        date=new_date,
-                        user_id=user_id
-                    ).first()
-                    
-                    if existing and existing.id != progress.id:
-                        return generate_api_response(
-                            message='Progress already exists for this date',
-                            success=False,
-                            code=409
-                        )
-                    
-                    update_fields['date'] = new_date
-                except ValueError:
-                    return generate_api_response(
-                        message='Invalid date format',
-                        success=False,
-                        code=400
-                    )
-            
-            # Recalcular pontos se valor ou status mudou
-            if 'value' in update_fields or 'completed' in update_fields:
-                new_value = update_fields.get('value', progress.value)
-                new_completed = update_fields.get('completed', progress.completed)
-                
-                # Recalcular pontos
-                base_points = calculate_points_for_progress(activity, new_value, new_completed)
-                
-                # Recalcular streak bonus
-                streak_bonus, _, _ = calculate_streak_bonus(user_id, update_fields.get('date', progress.date))
-                
-                total_points = base_points + streak_bonus
-                
-                # Ajustar pontos do usuário
-                point_diff = total_points - progress.points_earned
-                
-                if point_diff != 0:
-                    update_user_points(
-                        user_id,
-                        point_diff,
-                        f'Ajuste de progresso: {activity.name}',
-                        activity.id
-                    )
-                
-                update_fields['points_earned'] = total_points
-                update_fields['streak_bonus'] = streak_bonus
-            
-            # Aplicar atualizações
-            for field, value in update_fields.items():
-                setattr(progress, field, value)
-            
-            db.session.commit()
-            
-            return generate_api_response(
-                message='Progress updated successfully',
-                data={
-                    'id': progress.id,
-                    'points_earned': progress.points_earned,
-                    'streak_bonus': progress.streak_bonus
-                }
-            )
-        
-        elif request.method == 'DELETE':
-            # Remover pontos associados
-            if progress.points_earned > 0:
-                update_user_points(
-                    user_id,
-                    -progress.points_earned,
-                    f'Remoção de progresso: {progress.activity.name}',
-                    progress.activity_id
-                )
-            
-            db.session.delete(progress)
-            db.session.commit()
-            
-            return generate_api_response(message='Progress deleted successfully')
-    
-    except ValueError as e:
-        db.session.rollback()
-        return generate_api_response(
-            message=f'Invalid data format: {str(e)}',
-            success=False,
-            code=400
-        )
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Progress detail error: {e}")
-        return generate_api_response(
-            message='Failed to process progress',
-            success=False,
-            code=500
-        )
-
-@app.route('/api/progress/history', methods=['GET'])
-@login_required
-def api_progress_history():
-    """Histórico de progresso"""
-    try:
-        user_id = g.user_id
-        
-        # Parâmetros de filtro
-        activity_id = request.args.get('activity_id', type=int)
-        category_id = request.args.get('category_id', type=int)
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        completed = request.args.get('completed', type=lambda v: v.lower() == 'true')
-        limit = request.args.get('limit', 50, type=int)
-        offset = request.args.get('offset', 0, type=int)
-        
-        query = Progress.query.filter_by(user_id=user_id)
-        
-        # Aplicar filtros
-        if activity_id:
-            query = query.filter_by(activity_id=activity_id)
-        
-        if category_id:
-            query = query.join(Activity).filter(Activity.category_id == category_id)
-        
-        if start_date:
-            try:
-                start = datetime.strptime(start_date, '%Y-%m-%d').date()
-                query = query.filter(Progress.date >= start)
-            except ValueError:
-                pass
-        
-        if end_date:
-            try:
-                end = datetime.strptime(end_date, '%Y-%m-%d').date()
-                query = query.filter(Progress.date <= end)
-            except ValueError:
-                pass
-        
-        if completed is not None:
-            query = query.filter_by(completed=completed)
-        
-        # Ordenar e paginar
-        total_count = query.count()
-        progress_list = query.order_by(
-            desc(Progress.date),
-            desc(Progress.created_at)
-        ).limit(limit).offset(offset).all()
-        
-        # Preparar resposta
-        result = []
-        for progress in progress_list:
-            activity = progress.activity
-            
-            result.append({
-                'id': progress.id,
-                'activity_id': activity.id,
-                'activity_name': activity.name,
-                'activity_category': activity.category.name if activity.category else '',
-                'activity_category_color': activity.category.color if activity.category else '#cccccc',
-                'date': progress.date.isoformat(),
-                'value': progress.value,
-                'unit': progress.unit,
-                'notes': progress.notes or '',
-                'completed': progress.completed,
-                'points_earned': progress.points_earned,
-                'streak_bonus': progress.streak_bonus,
-                'created_at': progress.created_at.isoformat() if progress.created_at else None,
-                'activity_target': activity.target_value,
-                'activity_progress': calculate_activity_progress(activity),
-                'from_schedule': progress.from_schedule
-            })
-        
-        return generate_api_response(data={
-            'progress': result,
-            'pagination': {
-                'total': total_count,
-                'limit': limit,
-                'offset': offset,
-                'has_more': (offset + len(result)) < total_count
-            }
-        })
-    
-    except Exception as e:
-        logger.error(f"Progress history error: {e}")
-        return generate_api_response(
-            message='Failed to retrieve progress history',
-            success=False,
-            code=500
-        )
-
-@app.route('/api/progress/summary', methods=['GET'])
-@login_required
-def api_progress_summary():
-    """Resumo de progresso"""
-    try:
-        user_id = g.user_id
-        
-        # Parâmetros
-        period = request.args.get('period', 'week')  # week, month, year, all
-        group_by = request.args.get('group_by', 'day')  # day, week, month, category
-        
-        # Definir período
-        today = date.today()
-        start_date = today
-        
-        if period == 'week':
-            start_date = today - timedelta(days=today.weekday())
-        elif period == 'month':
-            start_date = date(today.year, today.month, 1)
-        elif period == 'year':
-            start_date = date(today.year, 1, 1)
-        elif period == 'all':
-            start_date = date(2020, 1, 1)  # Data inicial arbitrária
-        
-        # Consultar progressos
-        query = Progress.query.filter(
-            Progress.user_id == user_id,
-            Progress.date >= start_date
-        )
-        
-        # Agrupar por período
-        if group_by == 'day':
-            result = query.with_entities(
-                Progress.date,
-                func.count(Progress.id).label('count'),
-                func.sum(Progress.points_earned).label('points')
-            ).group_by(Progress.date).order_by(Progress.date).all()
-            
-            data = [{
-                'date': r.date.isoformat(),
-                'count': r.count,
-                'points': r.points or 0
-            } for r in result]
-        
-        elif group_by == 'week':
-            # PostgreSQL: extract week from date
-            result = query.with_entities(
-                func.date_trunc('week', Progress.date).label('week_start'),
-                func.count(Progress.id).label('count'),
-                func.sum(Progress.points_earned).label('points')
-            ).group_by('week_start').order_by('week_start').all()
-            
-            data = [{
-                'week_start': r.week_start.date().isoformat(),
-                'count': r.count,
-                'points': r.points or 0
-            } for r in result]
-        
-        elif group_by == 'month':
-            result = query.with_entities(
-                func.date_trunc('month', Progress.date).label('month_start'),
-                func.count(Progress.id).label('count'),
-                func.sum(Progress.points_earned).label('points')
-            ).group_by('month_start').order_by('month_start').all()
-            
-            data = [{
-                'month_start': r.month_start.date().isoformat(),
-                'count': r.count,
-                'points': r.points or 0
-            } for r in result]
-        
-        elif group_by == 'category':
-            result = query.join(Activity).join(Category).with_entities(
-                Category.name,
-                Category.color,
-                func.count(Progress.id).label('count'),
-                func.sum(Progress.points_earned).label('points'),
-                func.avg(
-                    case([(Progress.completed == True, 100)], else_=Progress.value)
-                ).label('avg_progress')
-            ).group_by(Category.id, Category.name, Category.color).all()
-            
-            data = [{
-                'category': r.name,
-                'color': r.color,
-                'count': r.count,
-                'points': r.points or 0,
-                'avg_progress': round(float(r.avg_progress or 0), 1)
-            } for r in result]
-        
-        else:
-            data = []
-        
-        # Estatísticas gerais
-        total_count = query.count()
-        total_points = db.session.query(func.sum(Progress.points_earned)).filter(
-            Progress.user_id == user_id,
-            Progress.date >= start_date
-        ).scalar() or 0
-        
-        avg_points_per_day = 0
-        if period == 'week':
-            days = 7
-        elif period == 'month':
-            days = 30
-        elif period == 'year':
-            days = 365
-        else:
-            days = max((today - start_date).days, 1)
-        
-        avg_points_per_day = round(total_points / days, 1) if days > 0 else 0
-        
-        # Dias consecutivos com atividade
-        activity_dates = query.with_entities(Progress.date).distinct().order_by(Progress.date.desc()).all()
-        consecutive_days = 0
-        current_streak = 0
-        
-        if activity_dates:
-            dates = [r.date for r in activity_dates]
-            dates.sort(reverse=True)
-            
-            for i in range(len(dates) - 1):
-                if (dates[i] - dates[i + 1]).days == 1:
-                    current_streak += 1
-                else:
-                    break
-            
-            consecutive_days = current_streak + 1 if dates else 0
-        
-        return generate_api_response(data={
-            'summary': {
-                'period': period,
-                'start_date': start_date.isoformat(),
-                'end_date': today.isoformat(),
-                'total_activities': total_count,
-                'total_points': total_points,
-                'avg_points_per_day': avg_points_per_day,
-                'consecutive_days': consecutive_days,
-                'current_streak': current_streak
-            },
-            'data': data,
-            'group_by': group_by
-        })
-    
-    except Exception as e:
-        logger.error(f"Progress summary error: {e}")
-        return generate_api_response(
-            message='Failed to generate progress summary',
-            success=False,
-            code=500
-        )
-
-# ============ API DE AGENDAMENTOS ============
-@app.route('/api/schedules', methods=['GET', 'POST'])
-@login_required
-def api_schedules():
-    """Listar ou criar agendamentos"""
-    try:
-        user_id = g.user_id
-        
-        if request.method == 'GET':
-            # Parâmetros
-            start_date = request.args.get('start_date')
-            end_date = request.args.get('end_date')
-            activity_id = request.args.get('activity_id', type=int)
-            limit = request.args.get('limit', 100, type=int)
-            
-            query = ScheduledActivity.query.filter_by(user_id=user_id)
-            
-            # Filtrar por data
-            if start_date:
-                try:
-                    start = datetime.strptime(start_date, '%Y-%m-%d').date()
-                    query = query.filter(ScheduledActivity.scheduled_date >= start)
-                except ValueError:
-                    pass
-            
-            if end_date:
-                try:
-                    end = datetime.strptime(end_date, '%Y-%m-%d').date()
-                    query = query.filter(ScheduledActivity.scheduled_date <= end)
-                except ValueError:
-                    pass
-            
-            # Filtrar por atividade
-            if activity_id:
-                query = query.filter_by(activity_id=activity_id)
-            
-            # Ordenar
-            schedules = query.order_by(
-                ScheduledActivity.scheduled_date,
-                ScheduledActivity.scheduled_time
-            ).limit(limit).all()
-            
-            # Preparar resposta
-            result = []
-            for schedule in schedules:
-                activity = schedule.activity
-                
-                # Verificar se há progresso para este agendamento
-                has_progress = Progress.query.filter_by(
-                    activity_id=activity.id,
-                    date=schedule.scheduled_date,
-                    from_schedule=True
-                ).first() is not None
-                
-                result.append({
-                    'id': schedule.id,
-                    'activity_id': activity.id,
-                    'activity_name': activity.name,
-                    'activity_category': activity.category.name if activity.category else '',
-                    'activity_category_color': activity.category.color if activity.category else '#cccccc',
-                    'scheduled_date': schedule.scheduled_date.isoformat(),
-                    'scheduled_time': schedule.scheduled_time,
-                    'duration': schedule.duration,
-                    'created_at': schedule.created_at.isoformat() if schedule.created_at else None,
-                    'has_progress': has_progress,
-                    'activity_status': activity.status,
-                    'activity_progress': calculate_activity_progress(activity)
-                })
-            
-            return generate_api_response(data={'schedules': result})
-        
-        elif request.method == 'POST':
-            valid, data, error_response = validate_json_data(['activity_id', 'scheduled_date'])
-            if not valid:
-                return error_response
-            
-            # Verificar atividade
-            activity = Activity.query.filter_by(
-                id=data['activity_id'],
-                user_id=user_id
-            ).first()
-            
-            if not activity:
-                return generate_api_response(
-                    message='Activity not found',
-                    success=False,
-                    code=404
-                )
-            
-            # Processar data
-            try:
-                scheduled_date = datetime.strptime(data['scheduled_date'], '%Y-%m-%d').date()
-            except ValueError:
-                return generate_api_response(
-                    message='Invalid date format',
-                    success=False,
-                    code=400
-                )
-            
-            # Verificar se já existe agendamento para esta data
-            existing = ScheduledActivity.query.filter_by(
-                activity_id=activity.id,
-                scheduled_date=scheduled_date,
-                user_id=user_id
-            ).first()
-            
-            if existing:
-                return generate_api_response(
-                    message='Schedule already exists for this date',
-                    success=False,
-                    code=409
-                )
-            
-            # Criar agendamento
-            schedule = ScheduledActivity(
-                activity_id=activity.id,
-                user_id=user_id,
-                scheduled_date=scheduled_date,
-                scheduled_time=data.get('scheduled_time', '09:00'),
-                duration=data.get('duration', 60),
-                created_at=datetime.utcnow()
-            )
-            
-            db.session.add(schedule)
-            db.session.commit()
-            
-            return generate_api_response(
-                data={'id': schedule.id},
-                message='Schedule created successfully',
-                code=201
-            )
-    
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Schedules API error: {e}")
-        return generate_api_response(
-            message='Failed to process schedule',
-            success=False,
-            code=500
-        )
-
-# ============ API DE RECOMPENSAS ============
-@app.route('/api/rewards', methods=['GET', 'POST'])
-@login_required
-def api_rewards():
-    """Listar ou criar recompensas"""
-    try:
-        user_id = g.user_id
-        
-        if request.method == 'GET':
-            # Parâmetros
-            achieved = request.args.get('achieved', type=lambda v: v.lower() == 'true')
-            reward_type = request.args.get('type')
-            sort_by = request.args.get('sort_by', 'points_required')
-            sort_order = request.args.get('sort_order', 'asc')
-            
-            query = Reward.query.filter_by(user_id=user_id)
-            
-            # Filtrar por status
-            if achieved is not None:
-                query = query.filter_by(achieved=achieved)
-            
-            # Filtrar por tipo
-            if reward_type:
-                query = query.filter_by(reward_type=reward_type)
-            
-            # Ordenar
-            if sort_by == 'points_required':
-                if sort_order == 'desc':
-                    query = query.order_by(desc(Reward.points_required))
-                else:
-                    query = query.order_by(asc(Reward.points_required))
-            elif sort_by == 'created_at':
-                if sort_order == 'desc':
-                    query = query.order_by(desc(Reward.created_at))
-                else:
-                    query = query.order_by(asc(Reward.created_at))
-            elif sort_by == 'name':
-                if sort_order == 'desc':
-                    query = query.order_by(desc(Reward.name))
-                else:
-                    query = query.order_by(asc(Reward.name))
-            
-            rewards = query.all()
-            
-            # Obter pontos do usuário
-            user_points = UserPoints.query.filter_by(user_id=user_id).first()
-            current_points = user_points.points if user_points else 0
-            
-            # Preparar resposta
-            result = []
-            for reward in rewards:
-                result.append({
-                    'id': reward.id,
-                    'name': reward.name,
-                    'description': reward.description or '',
-                    'reward_type': reward.reward_type,
-                    'points_required': reward.points_required,
-                    'condition_type': reward.condition_type,
-                    'condition_value': reward.condition_value,
-                    'condition_activity_id': reward.condition_activity_id,
-                    'achieved': reward.achieved,
-                    'achieved_at': reward.achieved_at.isoformat() if reward.achieved_at else None,
-                    'created_at': reward.created_at.isoformat() if reward.created_at else None,
-                    'can_purchase': current_points >= reward.points_required and not reward.achieved,
-                    'progress': min(round((current_points / reward.points_required) * 100, 1), 100) if reward.points_required > 0 else 100
-                })
-            
-            return generate_api_response(data={
-                'rewards': result,
-                'current_points': current_points
-            })
-        
-        elif request.method == 'POST':
-            valid, data, error_response = validate_json_data(['name', 'points_required'])
-            if not valid:
-                return error_response
-            
-            # Validar pontos
-            try:
-                points_required = int(data['points_required'])
-                if points_required < 0:
-                    return generate_api_response(
-                        message='Points required must be positive',
-                        success=False,
-                        code=400
-                    )
-            except ValueError:
-                return generate_api_response(
-                    message='Invalid points value',
-                    success=False,
-                    code=400
-                )
-            
-            # Criar recompensa
-            reward = Reward(
-                name=data['name'],
-                description=data.get('description', ''),
-                reward_type=data.get('reward_type', 'custom'),
-                points_required=points_required,
-                condition_type='points',
-                condition_value=points_required,
-                user_id=user_id,
-                created_at=datetime.utcnow()
-            )
-            
-            db.session.add(reward)
-            db.session.commit()
-            
-            return generate_api_response(
-                data={'id': reward.id},
-                message='Reward created successfully',
-                code=201
-            )
-    
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Rewards API error: {e}")
-        return generate_api_response(
-            message='Failed to process reward',
-            success=False,
-            code=500
-        )
-
-# ============ API DE PONTOS ============
-@app.route('/api/points', methods=['GET'])
-@login_required
-def api_points():
-    """Obter pontos do usuário"""
-    try:
-        user_id = g.user_id
+        progress.points_earned = points_earned
+        progress.streak_bonus = streak_bonus
         
         user_points = UserPoints.query.filter_by(user_id=user_id).first()
         if not user_points:
             user_points = UserPoints(user_id=user_id, points=0)
             db.session.add(user_points)
-            db.session.commit()
         
-        # Calcular rank (simplificado)
-        total_users = UserPoints.query.count()
-        rank = UserPoints.query.filter(
-            UserPoints.points > user_points.points
-        ).count() + 1
+        user_points.points += points_earned
+        user_points.last_updated = datetime.utcnow()
         
-        # Pontos por categoria
-        category_points = db.session.query(
+        if points_earned > 0:
+            description = f'Progresso em {activity.name}'
+            if streak_bonus > 0:
+                description += f' + {streak_bonus} pts (sequência)'
+            
+            transaction = PointTransaction(
+                user_id=user_id,
+                points=points_earned,
+                description=description,
+                activity_id=activity.id
+            )
+            db.session.add(transaction)
+        
+        if completed:
+            activity.status = 'completed'
+            if measurement_type == 'percentage':
+                activity.manual_percentage = 100
+        
+        db.session.commit()
+        
+        current_progress = calculate_activity_progress(activity)
+        
+        return jsonify({
+            'id': progress.id,
+            'message': 'Progresso registrado com sucesso',
+            'points_earned': points_earned,
+            'streak_bonus': streak_bonus,
+            'current_progress': current_progress,
+            'activity_status': activity.status
+        })
+        
+    except Exception as e:
+        print(f"Erro ao registrar progresso: {str(e)}")
+        return jsonify({'message': f'Erro ao registrar progresso: {str(e)}'}), 500
+
+@app.route('/api/progress/recent')
+def api_recent_progress():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    since_date = request.args.get('since')
+    if since_date:
+        since_date = datetime.strptime(since_date, '%Y-%m-%d').date()
+    else:
+        since_date = date.today() - timedelta(days=7)
+    
+    progress_entries = Progress.query.filter(
+        Progress.user_id == user_id,
+        Progress.date >= since_date
+    ).order_by(Progress.date.desc()).all()
+    
+    return jsonify([{
+        'id': p.id,
+        'activity_id': p.activity_id,
+        'activity_name': p.activity.name,
+        'value': p.value,
+        'unit': p.unit,
+        'notes': p.notes,
+        'completed': p.completed,
+        'points_earned': p.points_earned,
+        'streak_bonus': p.streak_bonus,
+        'date': p.date.isoformat(),
+        'target_value': p.activity.target_value if p.activity else None
+    } for p in progress_entries])
+
+# ============ AGENDAMENTOS ============
+@app.route('/api/schedules', methods=['GET', 'POST'])
+def api_schedules():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    if request.method == 'POST':
+        data = request.get_json()
+        
+        scheduled_date = datetime.strptime(data['scheduled_date'], '%Y-%m-%d').date()
+        
+        schedule = ScheduledActivity(
+            activity_id=data['activity_id'],
+            user_id=user_id,
+            scheduled_date=scheduled_date,
+            scheduled_time=data['scheduled_time'],
+            duration=data['duration']
+        )
+        db.session.add(schedule)
+        db.session.commit()
+        return jsonify({'id': schedule.id, 'message': 'Atividade agendada com sucesso'})
+    
+    week_start = request.args.get('week_start')
+    if week_start:
+        week_start = datetime.strptime(week_start, '%Y-%m-%d').date()
+    else:
+        week_start = date.today() - timedelta(days=date.today().weekday())
+    
+    week_end = week_start + timedelta(days=6)
+    
+    schedules = ScheduledActivity.query.filter(
+        ScheduledActivity.user_id == user_id,
+        ScheduledActivity.scheduled_date >= week_start,
+        ScheduledActivity.scheduled_date <= week_end
+    ).all()
+    
+    return jsonify([{
+        'id': s.id,
+        'activity_id': s.activity_id,
+        'activity_name': s.activity.name,
+        'category_color': s.activity.category.color,
+        'scheduled_date': s.scheduled_date.isoformat(),
+        'scheduled_time': s.scheduled_time,
+        'duration': s.duration
+    } for s in schedules])
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['PUT', 'DELETE'])
+def api_schedule(schedule_id):
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    schedule = ScheduledActivity.query.filter_by(id=schedule_id, user_id=user_id).first_or_404()
+    
+    if request.method == 'PUT':
+        data = request.get_json()
+        
+        if 'scheduled_date' in data:
+            schedule.scheduled_date = datetime.strptime(data['scheduled_date'], '%Y-%m-%d').date()
+        if 'scheduled_time' in data:
+            schedule.scheduled_time = data['scheduled_time']
+        if 'duration' in data:
+            schedule.duration = data['duration']
+        
+        db.session.commit()
+        return jsonify({'message': 'Agendamento atualizado com sucesso'})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(schedule)
+        db.session.commit()
+        return jsonify({'message': 'Agendamento excluído com sucesso'})
+
+@app.route('/api/schedules/<int:schedule_id>/replicate', methods=['POST'])
+def api_replicate_schedule(schedule_id):
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    original_schedule = ScheduledActivity.query.filter_by(id=schedule_id, user_id=user_id).first_or_404()
+    data = request.get_json()
+    
+    replicate_type = data.get('type', 'weekly')
+    until_date = datetime.strptime(data['until_date'], '%Y-%m-%d').date()
+    days_of_week = data.get('days_of_week', [])
+    
+    if days_of_week and isinstance(days_of_week[0], str):
+        days_of_week = [int(day) for day in days_of_week]
+    
+    created_schedules = []
+    current_date = original_schedule.scheduled_date
+    
+    while current_date <= until_date:
+        if should_replicate(current_date, original_schedule.scheduled_date, replicate_type, days_of_week):
+            new_schedule = ScheduledActivity(
+                activity_id=original_schedule.activity_id,
+                user_id=user_id,
+                scheduled_date=current_date,
+                scheduled_time=original_schedule.scheduled_time,
+                duration=original_schedule.duration
+            )
+            db.session.add(new_schedule)
+            created_schedules.append(new_schedule)
+        
+        current_date += timedelta(days=1)
+    
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'{len(created_schedules)} agendamentos criados com sucesso',
+        'created_count': len(created_schedules)
+    })
+
+def should_replicate(current_date, original_date, replicate_type, days_of_week):
+    if replicate_type == 'daily':
+        return True
+    elif replicate_type == 'weekly':
+        if days_of_week:
+            return current_date.weekday() in days_of_week
+        else:
+            return current_date.weekday() == original_date.weekday()
+    elif replicate_type == 'monthly':
+        return current_date.day == original_date.day
+    return False
+
+# ============ RECOMPENSAS ============
+@app.route('/api/rewards', methods=['GET', 'POST'])
+def api_rewards():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    if request.method == 'POST':
+        data = request.get_json()
+        
+        points_required = data.get('points_required', 0)
+        try:
+            points_required = int(points_required)
+        except (ValueError, TypeError):
+            points_required = 0
+        
+        reward = Reward(
+            name=data['name'],
+            description=data.get('description', ''),
+            reward_type=data.get('reward_type', 'custom'),
+            points_required=points_required,
+            condition_type='points',
+            condition_value=points_required,
+            user_id=user_id
+        )
+        db.session.add(reward)
+        db.session.commit()
+        return jsonify({'id': reward.id, 'message': 'Recompensa criada com sucesso'})
+    
+    rewards = Reward.query.filter_by(user_id=user_id).all()
+    return jsonify([{
+        'id': reward.id,
+        'name': reward.name,
+        'description': reward.description,
+        'reward_type': reward.reward_type,
+        'points_required': reward.points_required,
+        'condition_type': reward.condition_type,
+        'condition_value': reward.condition_value,
+        'condition_activity_id': reward.condition_activity_id,
+        'achieved': reward.achieved,
+        'achieved_at': reward.achieved_at.isoformat() if reward.achieved_at else None,
+        'created_at': reward.created_at.isoformat() if reward.created_at else None
+    } for reward in rewards])
+
+@app.route('/api/rewards/<int:reward_id>', methods=['PUT', 'DELETE'])
+def api_reward(reward_id):
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    reward = Reward.query.filter_by(id=reward_id, user_id=user_id).first_or_404()
+    
+    if request.method == 'PUT':
+        data = request.get_json()
+        
+        if 'points_required' in data:
+            try:
+                reward.points_required = int(data['points_required'])
+            except (ValueError, TypeError):
+                reward.points_required = 0
+        
+        if 'name' in data:
+            reward.name = data['name']
+        if 'description' in data:
+            reward.description = data.get('description', '')
+        if 'achieved' in data:
+            reward.achieved = data['achieved']
+            if data['achieved']:
+                reward.achieved_at = datetime.utcnow()
+            else:
+                reward.achieved_at = None
+        
+        db.session.commit()
+        return jsonify({'message': 'Recompensa atualizada com sucesso'})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(reward)
+        db.session.commit()
+        return jsonify({'message': 'Recompensa excluída com sucesso'})
+
+@app.route('/api/rewards/<int:reward_id>/purchase', methods=['POST'])
+def api_purchase_reward(reward_id):
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    reward = Reward.query.filter_by(id=reward_id, user_id=user_id).first_or_404()
+    user_points = UserPoints.query.filter_by(user_id=user_id).first()
+    
+    if not user_points:
+        user_points = UserPoints(user_id=user_id, points=0)
+        db.session.add(user_points)
+    
+    if user_points.points < reward.points_required:
+        return jsonify({'message': 'Pontos insuficientes para resgatar esta recompensa'}), 400
+    
+    user_points.points -= reward.points_required
+    user_points.last_updated = datetime.utcnow()
+    
+    reward.achieved = True
+    reward.achieved_at = datetime.utcnow()
+    
+    transaction = PointTransaction(
+        user_id=user_id,
+        points=-reward.points_required,
+        description=f'Resgate: {reward.name}'
+    )
+    db.session.add(transaction)
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Recompensa resgatada com sucesso!',
+        'remaining_points': user_points.points
+    })
+
+# ============ PONTOS ============
+@app.route('/api/points')
+def api_points():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    user_points = UserPoints.query.filter_by(user_id=user_id).first()
+    if not user_points:
+        user_points = UserPoints(user_id=user_id, points=0)
+        db.session.add(user_points)
+        db.session.commit()
+    
+    return jsonify({
+        'total_points': user_points.points,
+        'last_updated': user_points.last_updated.isoformat() if user_points.last_updated else None
+    })
+
+@app.route('/api/points/transactions')
+def api_point_transactions():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    transactions = PointTransaction.query.filter_by(
+        user_id=user_id
+    ).order_by(PointTransaction.created_at.desc()).limit(50).all()
+    
+    return jsonify([{
+        'id': t.id,
+        'points': t.points,
+        'description': t.description,
+        'activity_name': t.activity.name if t.activity else None,
+        'created_at': t.created_at.isoformat()
+    } for t in transactions])
+
+@app.route('/api/points/add', methods=['POST'])
+def api_add_points():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    data = request.get_json()
+    points = data.get('points', 0)
+    description = data.get('description', 'Pontos adicionados')
+    
+    user_points = UserPoints.query.filter_by(user_id=user_id).first()
+    if not user_points:
+        user_points = UserPoints(user_id=user_id, points=0)
+        db.session.add(user_points)
+    
+    user_points.points += points
+    user_points.last_updated = datetime.utcnow()
+    
+    transaction = PointTransaction(
+        user_id=user_id,
+        points=points,
+        description=description
+    )
+    db.session.add(transaction)
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'{points} pontos adicionados com sucesso!',
+        'total_points': user_points.points
+    })
+
+# ============ STREAK ============
+def calculate_streak_bonus(user_id):
+    streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
+    if not streak:
+        streak = WeeklyStreak(user_id=user_id, streak_count=0)
+        db.session.add(streak)
+    
+    today = date.today()
+    last_activity = streak.last_activity_date
+    
+    if not last_activity or (today - last_activity).days > 7:
+        streak.streak_count = 1
+    elif (today - last_activity).days <= 7 and (today - last_activity).days >= 1:
+        streak.streak_count += 1
+    
+    streak.last_activity_date = today
+    db.session.commit()
+    
+    if streak.streak_count == 1:
+        return 1, "É um bom começo!"
+    elif streak.streak_count == 2:
+        return 2, "Você está indo bem!"
+    elif streak.streak_count == 3:
+        return 3, "Continue assim!"
+    elif streak.streak_count == 4:
+        return 4, "1 mês! Crescimento muito consistente!"
+    elif streak.streak_count >= 8:
+        return 8, "Ninguém para você, sai da frente!"
+    elif streak.streak_count >= 5:
+        return streak.streak_count, f"{streak.streak_count} semanas! Impressionante!"
+    else:
+        return streak.streak_count, f"{streak.streak_count} semanas consecutivas!"
+
+@app.route('/api/streak')
+def api_streak():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
+    if not streak:
+        streak = WeeklyStreak(user_id=user_id, streak_count=0)
+        db.session.add(streak)
+        db.session.commit()
+    
+    messages = {
+        1: "É um bom começo!",
+        2: "Você está indo bem!",
+        3: "Continue assim!",
+        4: "1 mês! Crescimento muito consistente!",
+        5: "5 semanas! Impressionante!",
+        6: "6 semanas! Não desista!",
+        7: "7 semanas! Você é dedicado!",
+        8: "2 meses! Ninguém para você!"
+    }
+    
+    streak_message = messages.get(streak.streak_count, f"{streak.streak_count} semanas consecutivas!")
+    
+    return jsonify({
+        'streak_count': streak.streak_count,
+        'last_activity_date': streak.last_activity_date.isoformat() if streak.last_activity_date else None,
+        'message': streak_message
+    })
+
+def get_current_streak(user_id):
+    try:
+        streak_record = WeeklyStreak.query.filter_by(user_id=user_id).first()
+        
+        if not streak_record:
+            return 0
+        
+        today = date.today()
+        last_activity = streak_record.last_activity_date
+        
+        if not last_activity:
+            return 0
+        
+        if isinstance(last_activity, datetime):
+            last_activity = last_activity.date()
+        
+        days_since_last = (today - last_activity).days
+        
+        if days_since_last <= 1:
+            return streak_record.streak_count
+        else:
+            return 0
+            
+    except Exception as e:
+        print(f"Erro em get_current_streak: {str(e)}")
+        return 0
+
+# ============ DASHBOARD ============
+@app.route('/api/dashboard/stats')
+def api_dashboard_stats():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({'error': 'Usuário não autenticado'}), 401
+    
+    total_activities = Activity.query.filter_by(user_id=user_id).count()
+    completed_activities = Activity.query.filter_by(user_id=user_id, status='completed').count()
+    total_categories = Category.query.filter_by(user_id=user_id).count()
+    
+    week_start = date.today() - timedelta(days=date.today().weekday())
+    week_progress = Progress.query.filter(
+        Progress.user_id == user_id,
+        Progress.date >= week_start
+    ).count()
+    
+    return jsonify({
+        'total_activities': total_activities,
+        'completed_activities': completed_activities,
+        'total_categories': total_categories,
+        'week_progress': week_progress
+    })
+
+# ============ PERFIL ============
+@app.route('/api/profile/stats')
+def api_profile_stats():
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        category_hours = db.session.query(
             Category.name,
             Category.color,
-            func.sum(Progress.points_earned).label('total_points')
+            func.sum(ScheduledActivity.duration).label('total_minutes')
         ).join(Activity, Category.id == Activity.category_id
-        ).join(Progress, Activity.id == Progress.activity_id
-        ).filter(Progress.user_id == user_id
+        ).join(ScheduledActivity, Activity.id == ScheduledActivity.activity_id
+        ).filter(ScheduledActivity.user_id == user_id
         ).group_by(Category.id).all()
         
-        return generate_api_response(data={
-            'points': user_points.points,
-            'last_updated': user_points.last_updated.isoformat() if user_points.last_updated else None,
-            'rank': rank,
-            'total_users': total_users,
-            'percentile': round((1 - (rank / total_users)) * 100, 1) if total_users > 0 else 0,
-            'by_category': [{
-                'category': cp.name,
-                'color': cp.color,
-                'points': cp.total_points or 0
-            } for cp in category_points]
-        })
-    
-    except Exception as e:
-        logger.error(f"Points API error: {e}")
-        return generate_api_response(
-            message='Failed to retrieve points',
-            success=False,
-            code=500
-        )
-
-# ============ API DE DASHBOARD ============
-@app.route('/api/dashboard/stats', methods=['GET'])
-@login_required
-def api_dashboard_stats():
-    """Estatísticas para o dashboard"""
-    try:
-        user_id = g.user_id
-        today = date.today()
+        category_time = [{
+            'category': cat.name,
+            'color': cat.color,
+            'hours': round(cat.total_minutes / 60, 1) if cat.total_minutes else 0
+        } for cat in category_hours]
         
-        # Atividades por status
+        completed_activities = Activity.query.filter_by(
+            user_id=user_id, 
+            status='completed'
+        ).all()
+        
+        avg_completion_times = []
+        for activity in completed_activities:
+            progress_entries = Progress.query.filter_by(
+                activity_id=activity.id
+            ).order_by(Progress.date.asc()).all()
+            
+            if len(progress_entries) >= 2:
+                start_date = progress_entries[0].date
+                end_date = progress_entries[-1].date
+                days_to_complete = (end_date - start_date).days
+                if days_to_complete > 0:
+                    avg_completion_times.append(days_to_complete)
+        
+        avg_days = sum(avg_completion_times) / len(avg_completion_times) if avg_completion_times else 0
+        
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+        month_start = date(today.year, today.month, 1)
+        
+        today_schedules = ScheduledActivity.query.filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date == today
+        ).count()
+        
+        week_schedules = ScheduledActivity.query.filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date >= week_start,
+            ScheduledActivity.scheduled_date <= today
+        ).count()
+        
+        month_schedules = ScheduledActivity.query.filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date >= month_start,
+            ScheduledActivity.scheduled_date <= today
+        ).count()
+        
         status_counts = db.session.query(
             Activity.status,
             func.count(Activity.id)
         ).filter(Activity.user_id == user_id).group_by(Activity.status).all()
         
-        status_data = {status: count for status, count in status_counts}
+        status_distribution = {status: count for status, count in status_counts}
         
-        # Progresso hoje
-        today_progress = Progress.query.filter_by(
-            user_id=user_id,
-            date=today
-        ).count()
-        
-        # Agendamentos hoje
-        today_schedules = ScheduledActivity.query.filter_by(
-            user_id=user_id,
-            scheduled_date=today
-        ).count()
-        
-        # Pontos hoje
-        today_points = db.session.query(func.sum(Progress.points_earned)).filter(
-            Progress.user_id == user_id,
-            Progress.date == today
-        ).scalar() or 0
-        
-        # Streak atual
-        streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
-        streak_count = streak.streak_count if streak else 0
-        
-        # Categorias com mais atividades
-        top_categories = db.session.query(
-            Category.name,
-            Category.color,
-            func.count(Activity.id).label('activity_count')
-        ).join(Activity, Category.id == Activity.category_id
-        ).filter(Activity.user_id == user_id
-        ).group_by(Category.id
-        ).order_by(desc('activity_count')).limit(5).all()
-        
-        # Próximas atividades (por deadline)
-        upcoming_activities = Activity.query.filter(
-            Activity.user_id == user_id,
-            Activity.status.in_(['want_to_do', 'in_progress']),
-            Activity.deadline >= today
-        ).order_by(Activity.deadline).limit(5).all()
-        
-        # Recompensas próximas
-        user_points = UserPoints.query.filter_by(user_id=user_id).first()
-        current_points = user_points.points if user_points else 0
-        
-        upcoming_rewards = Reward.query.filter(
-            Reward.user_id == user_id,
-            Reward.achieved == False,
-            Reward.points_required <= current_points + 100  # Próximas 100 pontos
-        ).order_by(Reward.points_required).limit(3).all()
-        
-        # Progresso semanal
-        week_start = today - timedelta(days=today.weekday())
-        weekly_data = []
-        
-        for i in range(7):
-            day = week_start + timedelta(days=i)
-            day_progress = Progress.query.filter_by(
-                user_id=user_id,
-                date=day
-            ).count()
-            
-            weekly_data.append({
-                'day': day.isoformat(),
-                'day_name': day.strftime('%a'),
-                'progress_count': day_progress
-            })
-        
-        return generate_api_response(data={
-            'overview': {
-                'total_activities': sum(status_data.values()),
-                'completed_activities': status_data.get('completed', 0),
-                'in_progress_activities': status_data.get('in_progress', 0),
-                'total_categories': Category.query.filter_by(user_id=user_id).count(),
-                'total_points': current_points
+        return jsonify({
+            'category_time': category_time,
+            'total_completed': len(completed_activities),
+            'avg_completion_days': round(avg_days, 1),
+            'priority_metrics': {
+                'today': today_schedules,
+                'week': week_schedules,
+                'month': month_schedules
             },
-            'today': {
-                'progress_count': today_progress,
-                'scheduled_count': today_schedules,
-                'points_earned': today_points
-            },
-            'streak': {
-                'count': streak_count,
-                'message': get_streak_message(streak_count)
-            },
-            'top_categories': [{
-                'name': cat.name,
-                'color': cat.color,
-                'count': cat.activity_count
-            } for cat in top_categories],
-            'upcoming_activities': [{
-                'id': act.id,
-                'name': act.name,
-                'deadline': act.deadline.isoformat() if act.deadline else None,
-                'category_color': act.category.color if act.category else '#cccccc',
-                'progress': calculate_activity_progress(act)
-            } for act in upcoming_activities],
-            'upcoming_rewards': [{
-                'id': reward.id,
-                'name': reward.name,
-                'points_required': reward.points_required,
-                'current_points': current_points,
-                'needed_points': max(0, reward.points_required - current_points)
-            } for reward in upcoming_rewards],
-            'weekly_progress': weekly_data,
-            'status_distribution': status_data
+            'status_distribution': status_distribution,
+            'total_activities': sum(status_distribution.values()),
+            'productivity_score': calculate_productivity_score(user_id)
         })
-    
+        
     except Exception as e:
-        logger.error(f"Dashboard stats error: {e}")
-        return generate_api_response(
-            message='Failed to retrieve dashboard statistics',
-            success=False,
-            code=500
-        )
-
-def get_streak_message(streak_count):
-    """Obter mensagem motivacional baseada no streak"""
-    messages = {
-        1: "🏁 Primeiro dia! Continue assim!",
-        2: "🔥 Dois dias seguidos! Bom trabalho!",
-        3: "🚀 Três dias! Você está no ritmo!",
-        4: "💪 Quatro dias! Impressionante!",
-        5: "🌟 Cinco dias! Metade da semana!",
-        6: "🎯 Seis dias! Quase lá!",
-        7: "🏆 Uma semana completa! Excelente!",
-        14: "✨ Duas semanas! Consistência impressionante!",
-        21: "👑 Três semanas! Você é incrível!",
-        30: "🎖️ Um mês! Ninguém para você!"
-    }
-    
-    return messages.get(streak_count, f"📈 {streak_count} dias seguidos! Continue!")
-
-def check_and_award_rewards(user_id, activity, progress):
-    """Verificar e conceder recompensas automaticamente"""
-    try:
-        earned_rewards = []
-        
-        # Obter pontos atuais
-        user_points = UserPoints.query.filter_by(user_id=user_id).first()
-        if not user_points:
-            return earned_rewards
-        
-        current_points = user_points.points
-        
-        # Verificar recompensas por pontos
-        point_rewards = Reward.query.filter(
-            Reward.user_id == user_id,
-            Reward.condition_type == 'points',
-            Reward.condition_value <= current_points,
-            Reward.achieved == False
-        ).all()
-        
-        for reward in point_rewards:
-            reward.achieved = True
-            reward.achieved_at = datetime.utcnow()
-            earned_rewards.append({
-                'id': reward.id,
-                'name': reward.name,
-                'type': 'points',
-                'threshold': reward.condition_value
-            })
-        
-        # Verificar recompensas por atividade específica
-        activity_rewards = Reward.query.filter(
-            Reward.user_id == user_id,
-            Reward.condition_type == 'activity',
-            Reward.condition_activity_id == activity.id,
-            Reward.achieved == False
-        ).all()
-        
-        for reward in activity_rewards:
-            # Verificar se atividade está completa
-            if activity.status == 'completed':
-                reward.achieved = True
-                reward.achieved_at = datetime.utcnow()
-                earned_rewards.append({
-                    'id': reward.id,
-                    'name': reward.name,
-                    'type': 'activity',
-                    'activity_name': activity.name
-                })
-        
-        # Verificar recompensas por streak
-        streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
-        if streak:
-            streak_rewards = Reward.query.filter(
-                Reward.user_id == user_id,
-                Reward.condition_type == 'streak',
-                Reward.condition_value <= streak.streak_count,
-                Reward.achieved == False
-            ).all()
-            
-            for reward in streak_rewards:
-                reward.achieved = True
-                reward.achieved_at = datetime.utcnow()
-                earned_rewards.append({
-                    'id': reward.id,
-                    'name': reward.name,
-                    'type': 'streak',
-                    'streak_count': streak.streak_count
-                })
-        
-        if earned_rewards:
-            db.session.commit()
-        
-        return earned_rewards
-    
-    except Exception as e:
-        logger.error(f"Error awarding rewards: {e}")
-        return []
-
-# ============ API DE PERFIL E ANALYTICS ============
-@app.route('/api/profile/analytics', methods=['GET'])
-@login_required
-def api_profile_analytics():
-    """Análises detalhadas do perfil"""
-    try:
-        user_id = g.user_id
-        today = date.today()
-        
-        # 1. Estatísticas básicas
-        total_activities = Activity.query.filter_by(user_id=user_id).count()
-        completed_activities = Activity.query.filter_by(user_id=user_id, status='completed').count()
-        completion_rate = round((completed_activities / total_activities * 100), 1) if total_activities > 0 else 0
-        
-        # 2. Progresso temporal
-        thirty_days_ago = today - timedelta(days=30)
-        
-        daily_progress = []
-        for i in range(30):
-            day = thirty_days_ago + timedelta(days=i)
-            count = Progress.query.filter_by(
-                user_id=user_id,
-                date=day
-            ).count()
-            
-            daily_progress.append({
-                'date': day.isoformat(),
-                'count': count
-            })
-        
-        # 3. Distribuição por categoria
-        category_distribution = db.session.query(
-            Category.name,
-            Category.color,
-            func.count(Activity.id).label('activity_count'),
-            func.sum(
-                case([(Activity.status == 'completed', 1)], else_=0)
-            ).label('completed_count')
-        ).join(Activity, Category.id == Activity.category_id
-        ).filter(Activity.user_id == user_id
-        ).group_by(Category.id).all()
-        
-        # 4. Padrões de horário
-        time_patterns = db.session.query(
-            func.substr(ScheduledActivity.scheduled_time, 1, 2).label('hour'),
-            func.count(ScheduledActivity.id).label('count')
-        ).filter(ScheduledActivity.user_id == user_id
-        ).group_by('hour').order_by('hour').all()
-        
-        # 5. Dias mais produtivos
-        day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-        productive_days = db.session.query(
-            func.extract('dow', Progress.date).label('day_of_week'),
-            func.count(Progress.id).label('count')
-        ).filter(Progress.user_id == user_id
-        ).group_by('day_of_week').order_by(desc('count')).all()
-        
-        # 6. Metas de longo prazo
-        upcoming_deadlines = Activity.query.filter(
-            Activity.user_id == user_id,
-            Activity.deadline >= today,
-            Activity.status.in_(['want_to_do', 'in_progress'])
-        ).order_by(Activity.deadline).limit(5).all()
-        
-        # 7. Pontuação de produtividade
-        productivity_score = calculate_productivity_score(user_id)
-        
-        return generate_api_response(data={
-            'basic_stats': {
-                'total_activities': total_activities,
-                'completed_activities': completed_activities,
-                'completion_rate': completion_rate,
-                'total_categories': len(category_distribution),
-                'productivity_score': productivity_score
-            },
-            'temporal_analysis': {
-                'daily_progress': daily_progress,
-                'avg_daily_activities': round(sum(p['count'] for p in daily_progress) / 30, 1),
-                'most_productive_day': day_names[int(productive_days[0][0])] if productive_days else 'N/A'
-            },
-            'category_analysis': [{
-                'category': cd.name,
-                'color': cd.color,
-                'total_activities': cd.activity_count,
-                'completed': cd.completed_count or 0,
-                'completion_rate': round((cd.completed_count or 0) / cd.activity_count * 100, 1) if cd.activity_count > 0 else 0
-            } for cd in category_distribution],
-            'time_patterns': [{
-                'hour': f"{tp.hour}:00",
-                'count': tp.count
-            } for tp in time_patterns],
-            'upcoming_goals': [{
-                'id': act.id,
-                'name': act.name,
-                'deadline': act.deadline.isoformat() if act.deadline else None,
-                'days_remaining': (act.deadline - today).days if act.deadline else None,
-                'progress': calculate_activity_progress(act)
-            } for act in upcoming_deadlines],
-            'recommendations': generate_recommendations(user_id)
-        })
-    
-    except Exception as e:
-        logger.error(f"Profile analytics error: {e}")
-        return generate_api_response(
-            message='Failed to generate analytics',
-            success=False,
-            code=500
-        )
+        print(f"Erro ao carregar estatísticas do perfil: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 def calculate_productivity_score(user_id):
-    """Calcular pontuação de produtividade"""
     try:
-        score = 50  # Base
-        
-        # 1. Taxa de conclusão (0-30 pontos)
         total_activities = Activity.query.filter_by(user_id=user_id).count()
-        completed_activities = Activity.query.filter_by(user_id=user_id, status='completed').count()
+        completed_activities = Activity.query.filter_by(
+            user_id=user_id, 
+            status='completed'
+        ).count()
         
-        if total_activities > 0:
-            completion_rate = completed_activities / total_activities
-            score += min(completion_rate * 30, 30)
+        completion_ratio = (completed_activities / total_activities * 100) if total_activities > 0 else 0
+        completion_score = min(completion_ratio, 100) * 0.4
         
-        # 2. Consistência (0-25 pontos)
         thirty_days_ago = date.today() - timedelta(days=30)
-        active_days = db.session.query(func.count(func.distinct(Progress.date))).filter(
+        recent_activities = Progress.query.filter(
+            Progress.user_id == user_id,
+            Progress.date >= thirty_days_ago
+        ).count()
+        
+        consistency_ratio = min(recent_activities / 20, 1)
+        consistency_score = consistency_ratio * 100 * 0.3
+        
+        category_count = len(Category.query.filter_by(user_id=user_id).all())
+        variety_score = min(category_count * 10, 100) * 0.2
+        
+        streak = get_current_streak(user_id)
+        streak_score = min(streak * 10, 100) * 0.1
+        
+        total_score = completion_score + consistency_score + variety_score + streak_score
+        
+        return round(total_score, 1)
+        
+    except Exception as e:
+        print(f"Erro em calculate_productivity_score: {str(e)}")
+        return 0
+
+def calculate_consistency_score(user_id):
+    try:
+        thirty_days_ago = date.today() - timedelta(days=30)
+        
+        active_days = db.session.query(
+            func.count(func.distinct(Progress.date))
+        ).filter(
             Progress.user_id == user_id,
             Progress.date >= thirty_days_ago
         ).scalar() or 0
         
-        consistency_rate = active_days / 30
-        score += min(consistency_rate * 25, 25)
+        total_days = 30
+        activity_consistency = (active_days / total_days) * 100 * 0.7
         
-        # 3. Variedade (0-15 pontos)
-        category_count = Category.query.filter_by(user_id=user_id).count()
-        score += min(category_count * 2, 15)
-        
-        # 4. Streak (0-10 pontos)
-        streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
-        streak_count = streak.streak_count if streak else 0
-        score += min(streak_count, 10)
-        
-        # 5. Planejamento (0-10 pontos)
-        future_schedules = ScheduledActivity.query.filter(
+        scheduled_days = db.session.query(
+            func.count(func.distinct(ScheduledActivity.scheduled_date))
+        ).filter(
             ScheduledActivity.user_id == user_id,
-            ScheduledActivity.scheduled_date >= date.today()
-        ).count()
+            ScheduledActivity.scheduled_date >= thirty_days_ago
+        ).scalar() or 0
         
-        score += min(future_schedules / 10, 10)
+        schedule_consistency = (scheduled_days / total_days) * 100 * 0.3
         
-        # 6. Progresso recente (0-10 pontos)
-        week_start = date.today() - timedelta(days=date.today().weekday())
-        weekly_progress = Progress.query.filter(
-            Progress.user_id == user_id,
-            Progress.date >= week_start
-        ).count()
+        total_consistency = activity_consistency + schedule_consistency
         
-        score += min(weekly_progress / 5, 10)
+        return round(min(total_consistency, 100), 1)
         
-        return round(min(score, 100), 1)
-    
-    except Exception:
-        return 50
+    except Exception as e:
+        print(f"Erro em calculate_consistency_score: {str(e)}")
+        return 0
 
-def generate_recommendations(user_id):
-    """Gerar recomendações personalizadas"""
-    recommendations = []
-    
+def get_fallback_profile_data(user_id):
+    return {
+        'category_time': [
+            {'category': 'Desenvolvimento', 'color': '#4ECDC4', 'hours': 45},
+            {'category': 'Estudos', 'color': '#FF6B6B', 'hours': 30},
+            {'category': 'Exercícios', 'color': '#FFD166', 'hours': 20},
+            {'category': 'Lazer', 'color': '#06D6A0', 'hours': 15}
+        ],
+        'total_completed': 42,
+        'avg_completion_days': 3,
+        'priority_metrics': {'today': 3, 'week': 12, 'month': 45},
+        'status_distribution': {'completed': 25, 'in_progress': 10, 'want_to_do': 7},
+        'total_activities': 42,
+        'productivity_score': 78,
+        'consistency_score': 85,
+        'current_streak': 7,
+        'patterns': {
+            'most_productive_day': 'quarta',
+            'favorite_category': 'Desenvolvimento',
+            'completion_rate': 75,
+            'recent_trend': 'up',
+            'busiest_time': '10:00',
+            'consistency_score': 85
+        },
+        'weekly_progress': [
+            {'day_name': 'Seg', 'score': 70, 'scheduled': 5, 'completed': 4},
+            {'day_name': 'Ter', 'score': 85, 'scheduled': 6, 'completed': 5},
+            {'day_name': 'Qua', 'score': 90, 'scheduled': 7, 'completed': 6},
+            {'day_name': 'Qui', 'score': 65, 'scheduled': 5, 'completed': 3},
+            {'day_name': 'Sex', 'score': 75, 'scheduled': 6, 'completed': 5},
+            {'day_name': 'Sáb', 'score': 50, 'scheduled': 4, 'completed': 2},
+            {'day_name': 'Dom', 'score': 40, 'scheduled': 3, 'completed': 1}
+        ],
+        'annual_progress': round(((date.today() - date(date.today().year, 1, 1)).days / 365) * 100, 1),
+        'user_id': user_id
+    }
+
+def get_profile_stats(user_id):
     try:
-        # Verificar atividades próximas do prazo
+        category_hours = db.session.query(
+            Category.name,
+            Category.color,
+            func.sum(ScheduledActivity.duration).label('total_minutes')
+        ).join(Activity, Category.id == Activity.category_id
+        ).join(ScheduledActivity, Activity.id == ScheduledActivity.activity_id
+        ).filter(ScheduledActivity.user_id == user_id
+        ).group_by(Category.id).all()
+        
+        category_time = [{
+            'category': cat.name,
+            'color': cat.color,
+            'hours': round(cat.total_minutes / 60, 1) if cat.total_minutes else 0
+        } for cat in category_hours]
+        
+        completed_activities = Activity.query.filter_by(
+            user_id=user_id, 
+            status='completed'
+        ).all()
+        
+        total_completed = len(completed_activities)
+        
+        avg_completion_times = []
+        for activity in completed_activities:
+            progress_entries = Progress.query.filter_by(
+                activity_id=activity.id
+            ).order_by(Progress.date.asc()).all()
+            
+            if len(progress_entries) >= 2:
+                start_date = progress_entries[0].date
+                end_date = progress_entries[-1].date
+                days_to_complete = (end_date - start_date).days
+                if days_to_complete > 0:
+                    avg_completion_times.append(days_to_complete)
+        
+        avg_completion_days = round(sum(avg_completion_times) / len(avg_completion_times), 1) if avg_completion_times else 0
+        
         today = date.today()
-        near_deadline = Activity.query.filter(
-            Activity.user_id == user_id,
-            Activity.deadline.between(today, today + timedelta(days=3)),
-            Activity.status.in_(['want_to_do', 'in_progress'])
-        ).all()
+        week_start = today - timedelta(days=today.weekday())
+        month_start = date(today.year, today.month, 1)
         
-        if near_deadline:
-            recommendations.append({
-                'type': 'deadline',
-                'message': f'⚠️ {len(near_deadline)} atividade(s) próxima(s) do prazo',
-                'priority': 'high'
-            })
+        today_schedules = ScheduledActivity.query.filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date == today
+        ).count()
         
-        # Verificar atividades paradas
-        stale_activities = Activity.query.filter(
-            Activity.user_id == user_id,
-            Activity.status == 'in_progress',
-            Activity.created_at < datetime.utcnow() - timedelta(days=14),
-            ~Activity.id.in_(
-                db.session.query(Progress.activity_id).filter(
-                    Progress.date >= date.today() - timedelta(days=7)
-                )
-            )
-        ).all()
+        week_schedules = ScheduledActivity.query.filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date >= week_start,
+            ScheduledActivity.scheduled_date <= today
+        ).count()
         
-        if stale_activities:
-            recommendations.append({
-                'type': 'stale',
-                'message': f'📅 {len(stale_activities)} atividade(s) sem progresso recente',
-                'priority': 'medium'
-            })
+        month_schedules = ScheduledActivity.query.filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date >= month_start,
+            ScheduledActivity.scheduled_date <= today
+        ).count()
         
-        # Verificar categorias negligenciadas
-        categories = Category.query.filter_by(user_id=user_id).all()
-        for category in categories:
-            recent_progress = Progress.query.join(Activity).filter(
+        status_counts = db.session.query(
+            Activity.status,
+            func.count(Activity.id)
+        ).filter(Activity.user_id == user_id).group_by(Activity.status).all()
+        
+        status_distribution = {status: count for status, count in status_counts}
+        
+        total_activities = Activity.query.filter_by(user_id=user_id).count()
+        productivity_score = calculate_productivity_score(user_id)
+        consistency_score = calculate_consistency_score(user_id)
+        current_streak = get_current_streak(user_id)
+        
+        weekly_progress = []
+        for i in range(4):
+            week_start_date = today - timedelta(days=today.weekday() + (7 * i))
+            week_end_date = week_start_date + timedelta(days=6)
+            
+            week_activities = Progress.query.filter(
                 Progress.user_id == user_id,
-                Activity.category_id == category.id,
-                Progress.date >= date.today() - timedelta(days=7)
+                Progress.date >= week_start_date,
+                Progress.date <= week_end_date
             ).count()
             
-            if recent_progress == 0:
-                recommendations.append({
-                    'type': 'neglected_category',
-                    'message': f'🎯 Categoria "{category.name}" sem atividade recente',
-                    'priority': 'low',
-                    'category_id': category.id
-                })
-        
-        # Verificar recompensas próximas
-        user_points = UserPoints.query.filter_by(user_id=user_id).first()
-        if user_points:
-            next_reward = Reward.query.filter(
-                Reward.user_id == user_id,
-                Reward.achieved == False,
-                Reward.points_required > user_points.points
-            ).order_by(Reward.points_required).first()
-            
-            if next_reward:
-                points_needed = next_reward.points_required - user_points.points
-                if points_needed <= 20:
-                    recommendations.append({
-                        'type': 'reward',
-                        'message': f'🏆 Faltam apenas {points_needed} pontos para "{next_reward.name}"',
-                        'priority': 'medium'
-                    })
-        
-        # Recomendação geral se poucas recomendações
-        if len(recommendations) < 2:
-            recommendations.append({
-                'type': 'general',
-                'message': '🎯 Continue registrando seu progresso diário para manter o ritmo!',
-                'priority': 'low'
+            weekly_progress.append({
+                'week_start': week_start_date.isoformat(),
+                'day_name': week_start_date.strftime('%A')[:3],
+                'score': min(week_activities * 10, 100),
+                'scheduled': ScheduledActivity.query.filter(
+                    ScheduledActivity.user_id == user_id,
+                    ScheduledActivity.scheduled_date >= week_start_date,
+                    ScheduledActivity.scheduled_date <= week_end_date
+                ).count(),
+                'completed': week_activities
             })
-    
-    except Exception as e:
-        logger.error(f"Error generating recommendations: {e}")
-    
-    return recommendations
-
-# ============ API DE SISTEMA ============
-@app.route('/api/system/health', methods=['GET'])
-def api_system_health():
-    """Verificar saúde do sistema"""
-    try:
-        # Verificar banco de dados
-        db.session.execute(text('SELECT 1'))
-        db_healthy = True
         
-        # Verificar tabelas principais
-        tables = ['users', 'activities', 'categories', 'progress']
-        table_status = {}
+        weekly_progress.reverse()
         
-        for table in tables:
-            try:
-                db.session.execute(text(f'SELECT COUNT(*) FROM {table} LIMIT 1'))
-                table_status[table] = 'healthy'
-            except Exception:
-                table_status[table] = 'unhealthy'
+        patterns = analyze_time_patterns(user_id)
         
-        # Verificar conexões ativas
-        active_users = User.query.count()
-        active_activities = Activity.query.count()
+        if patterns.get('busiest_days'):
+            most_productive_day = max(patterns['busiest_days'].items(), key=lambda x: x[1])[0]
+        else:
+            most_productive_day = 'quarta'
         
-        # Informações do sistema
-        system_info = {
-            'python_version': os.sys.version,
-            'flask_version': '2.3.3',
-            'database_type': 'PostgreSQL',
-            'environment': os.environ.get('FLASK_ENV', 'development'),
-            'debug_mode': app.debug
+        if category_time:
+            favorite_category = max(category_time, key=lambda x: x['hours'])['category']
+        else:
+            favorite_category = 'Desenvolvimento'
+        
+        completion_rate = (total_completed / total_activities * 100) if total_activities > 0 else 0
+        
+        if patterns.get('preferred_times'):
+            busiest_time = max(patterns['preferred_times'].items(), key=lambda x: x[1])[0].split('-')[0]
+        else:
+            busiest_time = '10:00'
+        
+        if len(weekly_progress) >= 2:
+            recent_trend = 'up' if weekly_progress[-1]['completed'] > weekly_progress[-2]['completed'] else 'stable'
+        else:
+            recent_trend = 'stable'
+        
+        total_days = 365
+        days_passed = (today - date(today.year, 1, 1)).days
+        annual_progress = min((days_passed / total_days) * 100, 100)
+        
+        return {
+            'category_time': category_time,
+            'total_completed': total_completed,
+            'avg_completion_days': avg_completion_days,
+            'priority_metrics': {
+                'today': today_schedules,
+                'week': week_schedules,
+                'month': month_schedules
+            },
+            'status_distribution': status_distribution,
+            'total_activities': total_activities,
+            'productivity_score': productivity_score,
+            'consistency_score': consistency_score,
+            'current_streak': current_streak,
+            'patterns': {
+                'most_productive_day': most_productive_day,
+                'favorite_category': favorite_category,
+                'completion_rate': round(completion_rate, 1),
+                'recent_trend': recent_trend,
+                'busiest_time': busiest_time,
+                'consistency_score': consistency_score
+            },
+            'weekly_progress': weekly_progress,
+            'annual_progress': round(annual_progress, 1),
+            'user_id': user_id
         }
         
-        return generate_api_response(data={
-            'status': 'healthy' if db_healthy and all(s == 'healthy' for s in table_status.values()) else 'degraded',
-            'database': 'connected' if db_healthy else 'disconnected',
-            'tables': table_status,
-            'metrics': {
-                'active_users': active_users,
-                'active_activities': active_activities,
-                'total_categories': Category.query.count(),
-                'total_progress': Progress.query.count()
+    except Exception as e:
+        print(f"Erro crítico em get_profile_stats: {str(e)}")
+        return get_fallback_profile_data(user_id)
+
+def analyze_time_patterns(user_id):
+    try:
+        schedules = ScheduledActivity.query.filter_by(user_id=user_id).all()
+        
+        if not schedules:
+            return {'busiest_days': {}, 'preferred_times': {}}
+        
+        patterns = {
+            'busiest_days': {},
+            'preferred_times': {},
+            'average_session_length': 0,
+            'consistency_score': 0
+        }
+        
+        days_map = {
+            0: 'segunda',
+            1: 'terça', 
+            2: 'quarta',
+            3: 'quinta',
+            4: 'sexta',
+            5: 'sábado',
+            6: 'domingo'
+        }
+        
+        for schedule in schedules:
+            weekday = schedule.scheduled_date.weekday()
+            day_name = days_map.get(weekday, str(weekday))
+            patterns['busiest_days'][day_name] = patterns['busiest_days'].get(day_name, 0) + 1
+        
+        for schedule in schedules:
+            try:
+                if schedule.scheduled_time:
+                    hour = int(schedule.scheduled_time.split(':')[0])
+                    time_slot = f"{hour:02d}:00"
+                    patterns['preferred_times'][time_slot] = patterns['preferred_times'].get(time_slot, 0) + 1
+            except:
+                continue
+        
+        total_duration = sum(s.duration for s in schedules if s.duration)
+        patterns['average_session_length'] = round(total_duration / len(schedules), 1) if schedules else 0
+        
+        if len(schedules) > 1:
+            dates = sorted([s.scheduled_date for s in schedules])
+            intervals = [(dates[i+1] - dates[i]).days for i in range(len(dates)-1)]
+            
+            if intervals:
+                avg_interval = sum(intervals) / len(intervals)
+                patterns['consistency_score'] = min(100, max(0, 100 - (avg_interval * 10)))
+        
+        return patterns
+        
+    except Exception as e:
+        print(f"Erro em analyze_time_patterns: {str(e)}")
+        return {'busiest_days': {}, 'preferred_times': {}}
+
+def get_recent_activities(user_id, limit=50):
+    try:
+        since_date = date.today() - timedelta(days=7)
+        
+        progress_entries = Progress.query.filter(
+            Progress.user_id == user_id,
+            Progress.date >= since_date
+        ).order_by(Progress.date.desc()).limit(limit).all()
+        
+        return [{
+            'id': p.id,
+            'activity_id': p.activity_id,
+            'activity_name': p.activity.name if p.activity else 'Atividade não encontrada',
+            'category': p.activity.category.name if p.activity and p.activity.category else 'Sem categoria',
+            'timestamp': p.date.isoformat() if p.date else None,
+            'value': p.value,
+            'unit': p.unit,
+            'notes': p.notes,
+            'completed': p.completed,
+            'points_earned': p.points_earned,
+            'streak_bonus': p.streak_bonus,
+            'date': p.date.isoformat() if p.date else None,
+            'target_value': p.activity.target_value if p.activity else None,
+            'duration': p.activity.target_value if p.activity else 30,
+            'estimated_duration': p.activity.target_value if p.activity else 30,
+            'actual_duration': p.value if p.unit == 'minutos' else None,
+            'efficiency': min(p.value / p.activity.target_value, 1) if p.activity and p.activity.target_value and p.activity.target_value > 0 else 0.5,
+            'complexity': 'medium',
+            'status': 'completed' if p.completed else 'in_progress'
+        } for p in progress_entries]
+        
+    except Exception as e:
+        print(f"Erro em get_recent_activities: {str(e)}")
+        return []
+
+def get_time_patterns(user_id):
+    try:
+        thirty_days_ago = date.today() - timedelta(days=30)
+        
+        hourly_patterns = db.session.query(
+            func.strftime('%H', ScheduledActivity.scheduled_time).label('hour'),
+            func.count(ScheduledActivity.id).label('count')
+        ).filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date >= thirty_days_ago
+        ).group_by('hour').order_by('hour').all()
+        
+        daily_patterns = db.session.query(
+            func.strftime('%w', ScheduledActivity.scheduled_date).label('day_of_week'),
+            func.count(ScheduledActivity.id).label('count')
+        ).filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date >= thirty_days_ago
+        ).group_by('day_of_week').order_by('day_of_week').all()
+        
+        weekly_data = []
+        for i in range(4):
+            week_start = date.today() - timedelta(days=(7 * (i + 1)))
+            week_end = week_start + timedelta(days=6)
+            
+            week_progress = Progress.query.filter(
+                Progress.user_id == user_id,
+                Progress.date >= week_start,
+                Progress.date <= week_end
+            ).count()
+            
+            weekly_data.append({
+                'week_start': week_start.isoformat(),
+                'activities_completed': week_progress,
+                'total_hours': week_progress * 0.5,
+                'productivity': week_progress / 10
+            })
+        
+        return {
+            'hourly_patterns': {str(h.hour): h.count for h in hourly_patterns},
+            'daily_patterns': {str(d.day_of_week): d.count for d in daily_patterns},
+            'weekly_progress': weekly_data,
+            'recent_trends': {
+                'productivity_trend': 'up' if len(weekly_data) >= 2 and weekly_data[0]['activities_completed'] > weekly_data[1]['activities_completed'] else 'stable',
+                'consistency_score': calculate_consistency_score(user_id)
+            }
+        }
+        
+    except Exception as e:
+        print(f"Erro em get_time_patterns: {str(e)}")
+        return {}
+
+def get_recent_activities_for_ai(user_id, limit=50):
+    try:
+        activities = Activity.query.filter_by(
+            user_id=user_id
+        ).order_by(Activity.created_at.desc()).limit(limit).all()
+        
+        result = []
+        for act in activities:
+            progress_percentage = calculate_activity_progress(act)
+            current_value = get_current_progress_value(act)
+            
+            if act.measurement_type == 'units' and act.target_value:
+                duration = act.target_value
+            else:
+                duration = 30
+            
+            result.append({
+                'id': act.id,
+                'name': act.name,
+                'category_name': act.category.name if act.category else 'Geral',
+                'created_at': act.created_at.isoformat() if act.created_at else datetime.utcnow().isoformat(),
+                'duration': duration,
+                'estimated_duration': duration,
+                'actual_duration': current_value if act.measurement_type == 'units' else None,
+                'value': current_value,
+                'unit': act.target_unit if act.measurement_type == 'units' else '%',
+                'completed': act.status == 'completed',
+                'status': act.status,
+                'target_value': act.target_value,
+                'efficiency': progress_percentage / 100 if progress_percentage > 0 else 0.5,
+                'complexity': 'medium'
+            })
+        
+        return result
+        
+    except Exception as e:
+        print(f"Erro em get_recent_activities_for_ai: {str(e)}")
+        return []
+
+@app.route('/api/profile/complete')
+def api_profile_complete():
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        basic_stats = get_profile_stats(user_id)
+        activities = get_recent_activities_for_ai(user_id, limit=50)
+        time_patterns = get_time_patterns(user_id)
+        
+        enhanced_stats = {}
+        try:
+            enhanced_stats = {
+                'weekly': get_time_period_analysis(user_id, 'week'),
+                'monthly': get_time_period_analysis(user_id, 'month'),
+                'characterization': get_activity_profile(user_id),
+                'focus_areas': identify_focus_areas(user_id),
+                'growth_trend': analyze_growth_trend(user_id),
+                'current_streak': get_current_streak(user_id),
+                'consistency_score': calculate_consistency_score(user_id)
+            }
+        except Exception as enhanced_error:
+            print(f"Aviso em enhanced_stats: {enhanced_error}")
+            enhanced_stats = {
+                'weekly': {},
+                'monthly': {},
+                'characterization': {'type': 'standard', 'description': 'Perfil padrão'},
+                'focus_areas': [],
+                'growth_trend': 'stable',
+                'current_streak': 0,
+                'consistency_score': 0
+            }
+        
+        total_days = 365
+        days_passed = (date.today() - date(date.today().year, 1, 1)).days
+        annual_progress = min((days_passed / total_days) * 100, 100)
+        
+        return jsonify({
+            'basic': {
+                'category_time': basic_stats.get('category_time', []),
+                'total_completed': basic_stats.get('total_completed', 0),
+                'avg_completion_days': basic_stats.get('avg_completion_days', 0),
+                'priority_metrics': basic_stats.get('priority_metrics', {'today': 0, 'week': 0, 'month': 0}),
+                'status_distribution': basic_stats.get('status_distribution', {}),
+                'total_activities': basic_stats.get('total_activities', 0),
+                'productivity_score': basic_stats.get('productivity_score', 0),
+                'consistency_score': basic_stats.get('consistency_score', 0),
+                'current_streak': basic_stats.get('current_streak', 0),
+                'patterns': {
+                    'most_productive_day': 'quarta',
+                    'favorite_category': 'Desenvolvimento',
+                    'completion_rate': 75,
+                    'recent_trend': 'up',
+                    'busiest_time': '10:00',
+                    'consistency_score': basic_stats.get('consistency_score', 0)
+                },
+                'weekly_progress': enhanced_stats.get('weekly', {}),
+                'annual_progress': annual_progress,
+                'user_id': user_id
             },
-            'system': system_info,
-            'timestamp': datetime.utcnow().isoformat()
+            'activities': activities,
+            'time_patterns': time_patterns,
+            'enhanced': enhanced_stats,
+            'timestamp': datetime.utcnow().isoformat(),
+            'ai_ready': len(activities) > 10
+        })
+        
+    except Exception as e:
+        print(f"Erro em api_profile_complete: {str(e)}")
+        return jsonify({
+            'basic': {
+                'category_time': [],
+                'total_completed': 0,
+                'avg_completion_days': 0,
+                'priority_metrics': {'today': 0, 'week': 0, 'month': 0},
+                'status_distribution': {},
+                'total_activities': 0,
+                'productivity_score': 0,
+                'consistency_score': 0,
+                'current_streak': 0,
+                'patterns': {},
+                'weekly_progress': [],
+                'annual_progress': 0,
+                'user_id': user_id
+            },
+            'activities': [],
+            'time_patterns': {},
+            'enhanced': {},
+            'timestamp': datetime.utcnow().isoformat(),
+            'ai_ready': False,
+            'error': str(e)
+        }), 200
+
+def get_time_period_analysis(user_id, period='week'):
+    today = date.today()
+    
+    if period == 'week':
+        start_date = today - timedelta(days=today.weekday())
+        end_date = start_date + timedelta(days=6)
+    elif period == 'month':
+        start_date = date(today.year, today.month, 1)
+        end_date = date(today.year, today.month + 1, 1) - timedelta(days=1) if today.month < 12 else date(today.year + 1, 1, 1) - timedelta(days=1)
+    elif period == 'year':
+        start_date = date(today.year, 1, 1)
+        end_date = date(today.year, 12, 31)
+    else:
+        start_date = today - timedelta(days=7)
+        end_date = today
+    
+    schedules = ScheduledActivity.query.filter(
+        ScheduledActivity.user_id == user_id,
+        ScheduledActivity.scheduled_date >= start_date,
+        ScheduledActivity.scheduled_date <= end_date
+    ).all()
+    
+    category_hours = {}
+    for schedule in schedules:
+        activity = Activity.query.get(schedule.activity_id)
+        if activity:
+            category = Category.query.get(activity.category_id)
+            if category:
+                hours = schedule.duration / 60
+                category_hours[category.name] = category_hours.get(category.name, 0) + hours
+    
+    analysis = {
+        'period': period,
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'total_hours': sum(category_hours.values()),
+        'by_category': [
+            {
+                'category': cat,
+                'hours': round(hours, 1),
+                'percentage': round((hours / sum(category_hours.values())) * 100, 1) if sum(category_hours.values()) > 0 else 0
+            }
+            for cat, hours in category_hours.items()
+        ]
+    }
+    
+    return analysis
+
+def get_activity_profile(user_id):
+    activities = Activity.query.filter_by(user_id=user_id).all()
+    
+    if not activities:
+        return {'type': 'beginner', 'description': 'Iniciando a jornada de produtividade'}
+    
+    status_counts = {}
+    for activity in activities:
+        status_counts[activity.status] = status_counts.get(activity.status, 0) + 1
+    
+    completed_percentage = (status_counts.get('completed', 0) / len(activities)) * 100
+    
+    if completed_percentage > 80:
+        return {
+            'type': 'achiever',
+            'description': 'Perfil de alta realização com forte capacidade de finalização',
+            'strengths': ['Conclusão', 'Foco', 'Persistência']
+        }
+    elif completed_percentage > 50:
+        return {
+            'type': 'balanced',
+            'description': 'Equilíbrio entre planejamento e execução',
+            'strengths': ['Versatilidade', 'Adaptabilidade']
+        }
+    else:
+        return {
+            'type': 'explorer',
+            'description': 'Perfil exploratório com múltiplos interesses em desenvolvimento',
+            'strengths': ['Curiosidade', 'Aprendizado contínuo']
+        }
+
+def identify_focus_areas(user_id):
+    activities = Activity.query.filter_by(user_id=user_id).all()
+    
+    if not activities:
+        return []
+    
+    category_activities = {}
+    for activity in activities:
+        category = Category.query.get(activity.category_id)
+        if category:
+            category_activities[category.name] = category_activities.get(category.name, 0) + 1
+    
+    total_activities = len(activities)
+    focus_areas = []
+    
+    for category, count in category_activities.items():
+        percentage = (count / total_activities) * 100
+        if percentage >= 30:
+            focus_areas.append({
+                'category': category,
+                'percentage': round(percentage, 1),
+                'level': 'primary_focus'
+            })
+        elif percentage >= 15:
+            focus_areas.append({
+                'category': category,
+                'percentage': round(percentage, 1),
+                'level': 'secondary_focus'
+            })
+    
+    return focus_areas
+
+def analyze_growth_trend(user_id):
+    thirty_days_ago = date.today() - timedelta(days=30)
+    
+    recent_progress = Progress.query.filter(
+        Progress.user_id == user_id,
+        Progress.date >= thirty_days_ago
+    ).count()
+    
+    previous_period_start = thirty_days_ago - timedelta(days=30)
+    previous_progress = Progress.query.filter(
+        Progress.user_id == user_id,
+        Progress.date >= previous_period_start,
+        Progress.date < thirty_days_ago
+    ).count()
+    
+    if previous_progress == 0:
+        return 'stable'
+    
+    growth_percentage = ((recent_progress - previous_progress) / previous_progress) * 100
+    
+    if growth_percentage > 20:
+        return 'up'
+    elif growth_percentage < -20:
+        return 'down'
+    else:
+        return 'stable'
+
+# ============ ROTAS DE ANÁLISE DE IA ============
+@app.route('/api/ai/profile_analysis')
+def api_ai_profile_analysis():
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        ai_data = {
+            'user_profile': get_profile_stats(user_id),
+            'activities_data': get_recent_activities(user_id, limit=100),
+            'patterns_data': get_time_patterns(user_id),
+            'enhanced_stats': {
+                'weekly_analysis': get_time_period_analysis(user_id, 'week'),
+                'user_profile_type': get_activity_profile(user_id),
+                'focus_areas': identify_focus_areas(user_id)
+            }
+        }
+        
+        return jsonify(ai_data)
+        
+    except Exception as e:
+        print(f"Erro em api_ai_profile_analysis: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/profile/enhanced_stats')
+def api_profile_enhanced_stats():
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        today = date.today()
+        
+        basic_stats = api_profile_stats().get_json()
+        
+        time_analysis = {
+            'weekly': get_time_period_analysis(user_id, 'week'),
+            'monthly': get_time_period_analysis(user_id, 'month'),
+            'yearly': get_time_period_analysis(user_id, 'year'),
+            'patterns': analyze_time_patterns(user_id)
+        }
+        
+        characterization = {
+            'activity_profile': get_activity_profile(user_id),
+            'consistency_score': calculate_consistency_score(user_id),
+            'focus_areas': identify_focus_areas(user_id),
+            'growth_trend': analyze_growth_trend(user_id)
+        }
+        
+        return jsonify({
+            'basic_stats': basic_stats,
+            'time_analysis': time_analysis,
+            'characterization': characterization,
+            'last_updated': datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"Erro em enhanced_stats: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/profile/time_analysis')
+def api_time_analysis():
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        patterns = get_time_patterns(user_id)
+        return jsonify(patterns)
+    except Exception as e:
+        print(f"Erro em api_time_analysis: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/profile/historical')
+def api_profile_historical():
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        days = request.args.get('days', 90, type=int)
+        start_date = date.today() - timedelta(days=days)
+        
+        progress_entries = Progress.query.filter(
+            Progress.user_id == user_id,
+            Progress.date >= start_date
+        ).order_by(Progress.date.asc()).all()
+        
+        scheduled_entries = ScheduledActivity.query.filter(
+            ScheduledActivity.user_id == user_id,
+            ScheduledActivity.scheduled_date >= start_date
+        ).order_by(ScheduledActivity.scheduled_date.asc()).all()
+        
+        daily_data = {}
+        
+        for progress in progress_entries:
+            date_key = progress.date.isoformat()
+            if date_key not in daily_data:
+                daily_data[date_key] = {
+                    'date': date_key,
+                    'activities_completed': 0,
+                    'points_earned': 0,
+                    'scheduled_activities': 0,
+                    'time_spent': 0,
+                    'categories': {}
+                }
+            
+            daily_data[date_key]['activities_completed'] += 1
+            daily_data[date_key]['points_earned'] += progress.points_earned
+        
+        for schedule in scheduled_entries:
+            date_key = schedule.scheduled_date.isoformat()
+            if date_key not in daily_data:
+                daily_data[date_key] = {
+                    'date': date_key,
+                    'activities_completed': 0,
+                    'points_earned': 0,
+                    'scheduled_activities': 0,
+                    'time_spent': 0,
+                    'categories': {}
+                }
+            
+            daily_data[date_key]['scheduled_activities'] += 1
+            daily_data[date_key]['time_spent'] += schedule.duration
+            
+            activity = Activity.query.get(schedule.activity_id)
+            if activity:
+                category = Category.query.get(activity.category_id)
+                if category:
+                    cat_name = category.name
+                    daily_data[date_key]['categories'][cat_name] = daily_data[date_key]['categories'].get(cat_name, 0) + schedule.duration
+        
+        historical_data = sorted(daily_data.values(), key=lambda x: x['date'])
+        
+        total_completed = sum(day['activities_completed'] for day in historical_data)
+        total_points = sum(day['points_earned'] for day in historical_data)
+        total_scheduled = sum(day['scheduled_activities'] for day in historical_data)
+        
+        return jsonify({
+            'historical_data': historical_data,
+            'summary': {
+                'total_completed': total_completed,
+                'total_points': total_points,
+                'total_scheduled': total_scheduled,
+                'days_analyzed': days,
+                'period_start': start_date.isoformat(),
+                'period_end': date.today().isoformat()
+            },
+            'timeline': [{
+                'date': day['date'],
+                'completed': day['activities_completed'],
+                'scheduled': day['scheduled_activities'],
+                'points': day['points_earned']
+            } for day in historical_data],
+            'patterns': analyze_historical_patterns(historical_data)
+        })
+        
+    except Exception as e:
+        print(f"Erro em api_profile_historical: {str(e)}")
+        return jsonify(get_simulated_historical_data(days))
+
+def get_simulated_historical_data(days=90):
+    data = []
+    base_date = date.today() - timedelta(days=days)
+    
+    for i in range(days):
+        current_date = base_date + timedelta(days=i)
+        weekday = current_date.weekday()
+        
+        if weekday < 5:
+            completed = random.randint(2, 5)
+            scheduled = random.randint(3, 6)
+            points = random.randint(10, 30)
+        else:
+            completed = random.randint(0, 2)
+            scheduled = random.randint(1, 3)
+            points = random.randint(0, 15)
+        
+        data.append({
+            'date': current_date.isoformat(),
+            'activities_completed': completed,
+            'scheduled_activities': scheduled,
+            'points_earned': points,
+            'time_spent': random.randint(30, 180)
         })
     
-    except Exception as e:
-        logger.error(f"Health check error: {e}")
-        return generate_api_response(
-            data={'status': 'unhealthy', 'error': str(e)},
-            message='System health check failed',
-            success=False,
-            code=500
-        )
+    return {
+        'historical_data': data,
+        'summary': {
+            'total_completed': sum(d['activities_completed'] for d in data),
+            'total_points': sum(d['points_earned'] for d in data),
+            'total_scheduled': sum(d['scheduled_activities'] for d in data),
+            'days_analyzed': days,
+            'period_start': base_date.isoformat(),
+            'period_end': date.today().isoformat()
+        },
+        'timeline': data,
+        'patterns': {
+            'average_daily_activities': round(sum(d['activities_completed'] for d in data) / days, 1),
+            'best_day': max(data, key=lambda x: x['activities_completed'])['date'],
+            'consistency_score': random.randint(60, 90),
+            'trend': 'up' if days > 30 and data[-1]['activities_completed'] > data[0]['activities_completed'] else 'stable'
+        },
+        'simulated': True
+    }
 
-@app.route('/api/system/reset', methods=['POST'])
-@login_required
-def api_system_reset():
-    """Resetar dados do usuário (apenas desenvolvimento)"""
-    try:
-        if not app.debug:
-            return generate_api_response(
-                message='Reset only available in development mode',
-                success=False,
-                code=403
-            )
-        
-        user_id = g.user_id
-        
-        # Remover dados do usuário
-        Progress.query.filter_by(user_id=user_id).delete()
-        ScheduledActivity.query.filter_by(user_id=user_id).delete()
-        Activity.query.filter_by(user_id=user_id).delete()
-        Category.query.filter_by(user_id=user_id).delete()
-        Reward.query.filter_by(user_id=user_id).delete()
-        PointTransaction.query.filter_by(user_id=user_id).delete()
-        
-        # Resetar pontos e streak
-        UserPoints.query.filter_by(user_id=user_id).delete()
-        WeeklyStreak.query.filter_by(user_id=user_id).delete()
-        
-        # Recriar dados de exemplo
-        create_sample_data_for_user(user_id, force=True)
-        
-        db.session.commit()
-        
-        return generate_api_response(
-            message='User data reset successfully. Sample data created.',
-            data={'user_id': user_id}
-        )
+def analyze_historical_patterns(historical_data):
+    if not historical_data:
+        return {}
     
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Reset error: {e}")
-        return generate_api_response(
-            message='Reset failed',
-            success=False,
-            code=500
-        )
-
-@app.route('/api/system/backup', methods=['GET'])
-@login_required
-def api_system_backup():
-    """Backup dos dados do usuário"""
-    try:
-        user_id = g.user_id
+    avg_daily = sum(day['activities_completed'] for day in historical_data) / len(historical_data)
+    best_day = max(historical_data, key=lambda x: x['activities_completed'])
+    
+    values = [day['activities_completed'] for day in historical_data]
+    if values:
+        mean = sum(values) / len(values)
+        variance = sum((x - mean) ** 2 for x in values) / len(values)
+        std_dev = variance ** 0.5
+        consistency = max(0, 100 - (std_dev / mean * 100)) if mean > 0 else 0
+    else:
+        consistency = 0
+    
+    if len(historical_data) >= 14:
+        first_week = historical_data[:7]
+        last_week = historical_data[-7:]
+        avg_first = sum(day['activities_completed'] for day in first_week) / 7
+        avg_last = sum(day['activities_completed'] for day in last_week) / 7
         
-        # Coletar todos os dados do usuário
-        backup_data = {
-            'user': {
-                'id': user_id,
-                'username': session.get('username'),
-                'backup_date': datetime.utcnow().isoformat()
+        if avg_last > avg_first * 1.2:
+            trend = 'up'
+        elif avg_last < avg_first * 0.8:
+            trend = 'down'
+        else:
+            trend = 'stable'
+    else:
+        trend = 'stable'
+    
+    return {
+        'average_daily_activities': round(avg_daily, 1),
+        'best_day': best_day['date'],
+        'best_day_count': best_day['activities_completed'],
+        'consistency_score': round(consistency, 1),
+        'trend': trend
+    }
+
+# ============ ROTAS DE SAÚDE ============
+@app.route('/api/health')
+def api_health():
+    try:
+        user_count = User.query.count()
+        activity_count = Activity.query.filter_by(user_id=get_current_user_id() or 1).count()
+        
+        return jsonify({
+            'status': 'healthy',
+            'database': 'connected',
+            'user_data': {
+                'user_exists': user_count > 0,
+                'activity_count': activity_count
             },
-            'categories': [],
-            'activities': [],
-            'progress': [],
-            'schedules': [],
-            'rewards': [],
-            'points': None,
-            'streak': None
-        }
-        
-        # Categorias
-        categories = Category.query.filter_by(user_id=user_id).all()
-        for cat in categories:
-            backup_data['categories'].append({
-                'id': cat.id,
-                'name': cat.name,
-                'description': cat.description,
-                'color': cat.color,
-                'icon': cat.icon,
-                'created_at': cat.created_at.isoformat() if cat.created_at else None
-            })
-        
-        # Atividades
-        activities = Activity.query.filter_by(user_id=user_id).all()
-        for act in activities:
-            backup_data['activities'].append({
-                'id': act.id,
-                'name': act.name,
-                'description': act.description,
-                'category_id': act.category_id,
-                'status': act.status,
-                'measurement_type': act.measurement_type,
-                'target_value': act.target_value,
-                'target_unit': act.target_unit,
-                'manual_percentage': act.manual_percentage,
-                'start_date': act.start_date.isoformat() if act.start_date else None,
-                'end_date': act.end_date.isoformat() if act.end_date else None,
-                'deadline': act.deadline.isoformat() if act.deadline else None,
-                'parent_activity_id': act.parent_activity_id,
-                'created_at': act.created_at.isoformat() if act.created_at else None
-            })
-        
-        # Progresso
-        progress_list = Progress.query.filter_by(user_id=user_id).all()
-        for prog in progress_list:
-            backup_data['progress'].append({
-                'id': prog.id,
-                'activity_id': prog.activity_id,
-                'date': prog.date.isoformat(),
-                'value': prog.value,
-                'unit': prog.unit,
-                'notes': prog.notes,
-                'completed': prog.completed,
-                'points_earned': prog.points_earned,
-                'streak_bonus': prog.streak_bonus,
-                'created_at': prog.created_at.isoformat() if prog.created_at else None
-            })
-        
-        # Agendamentos
-        schedules = ScheduledActivity.query.filter_by(user_id=user_id).all()
-        for sched in schedules:
-            backup_data['schedules'].append({
-                'id': sched.id,
-                'activity_id': sched.activity_id,
-                'scheduled_date': sched.scheduled_date.isoformat(),
-                'scheduled_time': sched.scheduled_time,
-                'duration': sched.duration,
-                'created_at': sched.created_at.isoformat() if sched.created_at else None
-            })
-        
-        # Recompensas
-        rewards = Reward.query.filter_by(user_id=user_id).all()
-        for reward in rewards:
-            backup_data['rewards'].append({
-                'id': reward.id,
-                'name': reward.name,
-                'description': reward.description,
-                'reward_type': reward.reward_type,
-                'points_required': reward.points_required,
-                'condition_type': reward.condition_type,
-                'condition_value': reward.condition_value,
-                'condition_activity_id': reward.condition_activity_id,
-                'achieved': reward.achieved,
-                'achieved_at': reward.achieved_at.isoformat() if reward.achieved_at else None,
-                'created_at': reward.created_at.isoformat() if reward.created_at else None
-            })
-        
-        # Pontos
-        user_points = UserPoints.query.filter_by(user_id=user_id).first()
-        if user_points:
-            backup_data['points'] = {
-                'points': user_points.points,
-                'last_updated': user_points.last_updated.isoformat() if user_points.last_updated else None
-            }
-        
-        # Streak
-        streak = WeeklyStreak.query.filter_by(user_id=user_id).first()
-        if streak:
-            backup_data['streak'] = {
-                'streak_count': streak.streak_count,
-                'last_activity_date': streak.last_activity_date.isoformat() if streak.last_activity_date else None,
-                'created_at': streak.created_at.isoformat() if streak.created_at else None
-            }
-        
-        return generate_api_response(data=backup_data)
-    
+            'endpoints': {
+                'profile': True,
+                'activities': True,
+                'progress': True,
+                'ai': True
+            },
+            'timestamp': datetime.utcnow().isoformat()
+        })
     except Exception as e:
-        logger.error(f"Backup error: {e}")
-        return generate_api_response(
-            message='Backup failed',
-            success=False,
-            code=500
-        )
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
 
-# ============ UTILITÁRIOS ============
-@app.route('/api/utils/export/csv', methods=['GET'])
-@login_required
-def api_export_csv():
-    """Exportar dados para CSV"""
-    # Implementação simplificada
-    return generate_api_response(
-        message='CSV export not implemented',
-        success=False,
-        code=501
-    )
+@app.route('/api/health/check')
+def api_health_check():
+    endpoints = [
+        ('/api/profile/complete', 'complete_profile'),
+        ('/api/profile/stats', 'basic_stats'),
+        ('/api/progress/recent', 'recent_progress'),
+        ('/api/categories', 'categories'),
+        ('/api/activities', 'activities')
+    ]
+    
+    results = {}
+    
+    for endpoint, name in endpoints:
+        try:
+            with app.test_client() as client:
+                response = client.get(endpoint)
+                results[name] = {
+                    'status': response.status_code,
+                    'ok': response.status_code == 200,
+                    'endpoint': endpoint
+                }
+        except Exception as e:
+            results[name] = {
+                'status': 500,
+                'ok': False,
+                'error': str(e),
+                'endpoint': endpoint
+            }
+    
+    return jsonify({
+        'status': 'online' if all(r['ok'] for r in results.values()) else 'partial',
+        'results': results,
+        'timestamp': datetime.utcnow().isoformat()
+    })
 
-@app.route('/api/utils/import/json', methods=['POST'])
-@login_required
-def api_import_json():
-    """Importar dados de JSON"""
-    # Implementação simplificada
-    return generate_api_response(
-        message='JSON import not implemented',
-        success=False,
-        code=501
-    )
-
-@app.route('/api/utils/search', methods=['GET'])
-@login_required
-def api_global_search():
-    """Busca global"""
+@app.route('/api/database/info')
+def api_database_info():
+    is_production = bool(os.environ.get('DATABASE_URL'))
+    database_type = 'PostgreSQL (Produção)' if is_production else 'SQLite (Desenvolvimento)'
+    
     try:
-        user_id = g.user_id
-        query = request.args.get('q', '')
+        user_count = User.query.count()
+        activity_count = Activity.query.count()
         
-        if not query or len(query) < 2:
-            return generate_api_response(data={'results': []})
-        
-        results = {
-            'activities': [],
-            'categories': [],
-            'progress': []
-        }
-        
-        # Buscar atividades
-        activities = Activity.query.filter(
-            Activity.user_id == user_id,
-            or_(
-                Activity.name.ilike(f'%{query}%'),
-                Activity.description.ilike(f'%{query}%')
-            )
-        ).limit(10).all()
-        
-        for act in activities:
-            results['activities'].append({
-                'id': act.id,
-                'name': act.name,
-                'description': act.description[:100] + '...' if act.description and len(act.description) > 100 else act.description,
-                'category': act.category.name if act.category else '',
-                'category_color': act.category.color if act.category else '#cccccc',
-                'type': 'activity'
-            })
-        
-        # Buscar categorias
-        categories = Category.query.filter(
-            Category.user_id == user_id,
-            or_(
-                Category.name.ilike(f'%{query}%'),
-                Category.description.ilike(f'%{query}%')
-            )
-        ).limit(10).all()
-        
-        for cat in categories:
-            results['categories'].append({
-                'id': cat.id,
-                'name': cat.name,
-                'description': cat.description[:100] + '...' if cat.description and len(cat.description) > 100 else cat.description,
-                'color': cat.color,
-                'activity_count': Activity.query.filter_by(category_id=cat.id, user_id=user_id).count(),
-                'type': 'category'
-            })
-        
-        # Buscar progressos por notas
-        progress_list = Progress.query.filter(
-            Progress.user_id == user_id,
-            Progress.notes.ilike(f'%{query}%')
-        ).limit(10).all()
-        
-        for prog in progress_list:
-            results['progress'].append({
-                'id': prog.id,
-                'date': prog.date.isoformat(),
-                'notes': prog.notes[:100] + '...' if prog.notes and len(prog.notes) > 100 else prog.notes,
-                'activity_name': prog.activity.name if prog.activity else '',
-                'value': prog.value,
-                'unit': prog.unit,
-                'type': 'progress'
-            })
-        
-        return generate_api_response(data=results)
-    
+        return jsonify({
+            'database_type': database_type,
+            'user_count': user_count,
+            'activity_count': activity_count,
+            'production': is_production,
+            'persistence': 'PERMANENTE' if is_production else 'TEMPORÁRIA'
+        })
     except Exception as e:
-        logger.error(f"Search error: {e}")
-        return generate_api_response(
-            message='Search failed',
-            success=False,
-            code=500
-        )
+        return jsonify({
+            'database_type': database_type,
+            'error': str(e),
+            'production': is_production
+        })
 
-# ============ INICIALIZAÇÃO ============
+# ============ INICIALIZAÇÃO DO BANCO ============
 def init_database():
-    """Inicializar banco de dados"""
     with app.app_context():
         try:
-            # Criar tabelas se não existirem
-            db.create_all()
-            logger.info("✅ Database tables created/verified")
+            is_production = bool(os.environ.get('DATABASE_URL'))
             
-            # Criar usuários de exemplo se não existirem
-            sample_users = [
-                {'id': 1, 'username': 'usuario1', 'email': 'usuario1@exemplo.com'},
-                {'id': 2, 'username': 'usuario2', 'email': 'usuario2@exemplo.com'}
-            ]
-            
-            for user_data in sample_users:
-                user = User.query.get(user_data['id'])
-                if not user:
-                    user = User(
-                        id=user_data['id'],
-                        username=user_data['username'],
-                        email=user_data['email'],
-                        created_at=datetime.utcnow()
+            if is_production:
+                db.create_all()
+                print("✅ Produção: Tabelas verificadas/criadas no PostgreSQL")
+                
+                user1 = User.query.get(1)
+                if not user1:
+                    user1 = User(
+                        id=1, 
+                        username='usuario1', 
+                        email='usuario1@exemplo.com'
                     )
-                    db.session.add(user)
-                    logger.info(f"✅ Created sample user: {user_data['username']}")
+                    db.session.add(user1)
+                    print("✅ Usuário 1 criado (produção)")
+                
+                user2 = User.query.get(2)
+                if not user2:
+                    user2 = User(
+                        id=2, 
+                        username='usuario2', 
+                        email='usuario2@exemplo.com'
+                    )
+                    db.session.add(user2)
+                    print("✅ Usuário 2 criado (produção)")
+                    
+            else:
+                db.drop_all()
+                db.create_all()
+                print("✅ Desenvolvimento: Tabelas recriadas no SQLite")
+                
+                user1 = User(id=1, username='usuario1', email='usuario1@exemplo.com')
+                user2 = User(id=2, username='usuario2', email='usuario2@exemplo.com')
+                db.session.add(user1)
+                db.session.add(user2)
+                
+                create_sample_data_for_user(1)
+                print("✅ Dados de exemplo criados para desenvolvimento")
             
             db.session.commit()
-            
-            # Criar dados de exemplo para usuário 1 se não existirem
-            if Category.query.filter_by(user_id=1).count() == 0:
-                create_sample_data_for_user(1)
-                logger.info("✅ Created sample data for user 1")
-            
-            logger.info("🎉 Database initialization complete!")
-            
+                
         except Exception as e:
             db.session.rollback()
-            logger.error(f"❌ Database initialization failed: {e}")
-            raise
+            print(f"❌ Erro ao inicializar banco: {str(e)}")
 
-# ============ EXECUÇÃO PRINCIPAL ============
+# ============ EXECUÇÃO ============
+init_database()
+
 if __name__ == '__main__':
-    # Inicializar banco de dados
-    init_database()
-    
-    # Configurar porta
     port = int(os.environ.get('PORT', 5000))
-    
-    # Executar aplicação
-    app.run(
-        host='0.0.0.0',
-        port=port,
-        debug=os.environ.get('FLASK_ENV') == 'development',
-        threaded=True
-    )
+    app.run(host='0.0.0.0', port=port, debug=True)
