@@ -584,17 +584,12 @@ def api_progress():
         
         progress_date = datetime.strptime(data['date'], '%Y-%m-%d').date() if data.get('date') else date.today()
         
-        progress = Progress(
+        # VERIFICAR SE JÁ EXISTE UM REGISTRO DE PROGRESSO PARA ESTA ATIVIDADE NESTE DIA
+        existing_progress = Progress.query.filter_by(
             activity_id=activity.id,
             user_id=user_id,
-            date=progress_date,
-            value=value,
-            unit=unit,
-            notes=data.get('notes', ''),
-            completed=completed,
-            from_schedule=from_schedule
-        )
-        db.session.add(progress)
+            date=progress_date
+        ).first()
         
         points_earned = 0
         streak_bonus = 0
@@ -616,29 +611,81 @@ def api_progress():
             streak_bonus, _ = calculate_streak_bonus(user_id)
             points_earned += streak_bonus
         
-        progress.points_earned = points_earned
-        progress.streak_bonus = streak_bonus
-        
-        user_points = UserPoints.query.filter_by(user_id=user_id).first()
-        if not user_points:
-            user_points = UserPoints(user_id=user_id, points=0)
-            db.session.add(user_points)
-        
-        user_points.points += points_earned
-        user_points.last_updated = datetime.utcnow()
-        
-        if points_earned > 0:
-            description = f'Progresso em {activity.name}'
-            if streak_bonus > 0:
-                description += f' + {streak_bonus} pts (sequência)'
+        if existing_progress:
+            # ATUALIZAR PROGRESSO EXISTENTE
+            old_points = existing_progress.points_earned or 0
             
-            transaction = PointTransaction(
+            existing_progress.value = value
+            existing_progress.unit = unit
+            existing_progress.notes = data.get('notes', existing_progress.notes)
+            existing_progress.completed = completed
+            existing_progress.from_schedule = from_schedule
+            existing_progress.points_earned = points_earned
+            existing_progress.streak_bonus = streak_bonus
+            
+            progress = existing_progress
+            
+            # AJUSTAR PONTOS DO USUÁRIO (subtrair pontos antigos, adicionar novos)
+            user_points = UserPoints.query.filter_by(user_id=user_id).first()
+            if not user_points:
+                user_points = UserPoints(user_id=user_id, points=0)
+                db.session.add(user_points)
+            
+            # Remover pontos antigos e adicionar novos
+            user_points.points -= old_points
+            user_points.points += points_earned
+            user_points.last_updated = datetime.utcnow()
+            
+            # Criar transação de ajuste
+            if points_earned != old_points:
+                adjustment = points_earned - old_points
+                description = f'Ajuste de progresso em {activity.name}'
+                if streak_bonus > 0:
+                    description += f' + {streak_bonus} pts (sequência)'
+                
+                transaction = PointTransaction(
+                    user_id=user_id,
+                    points=adjustment,
+                    description=description,
+                    activity_id=activity.id
+                )
+                db.session.add(transaction)
+        else:
+            # CRIAR NOVO REGISTRO DE PROGRESSO
+            progress = Progress(
+                activity_id=activity.id,
                 user_id=user_id,
-                points=points_earned,
-                description=description,
-                activity_id=activity.id
+                date=progress_date,
+                value=value,
+                unit=unit,
+                notes=data.get('notes', ''),
+                completed=completed,
+                from_schedule=from_schedule,
+                points_earned=points_earned,
+                streak_bonus=streak_bonus
             )
-            db.session.add(transaction)
+            db.session.add(progress)
+            
+            user_points = UserPoints.query.filter_by(user_id=user_id).first()
+            if not user_points:
+                user_points = UserPoints(user_id=user_id, points=0)
+                db.session.add(user_points)
+            
+            user_points.points += points_earned
+            user_points.last_updated = datetime.utcnow()
+            
+            if points_earned > 0:
+                description = f'Progresso em {activity.name}'
+                if streak_bonus > 0:
+                    description += f' + {streak_bonus} pts (sequência)'
+                
+                transaction = PointTransaction(
+                    user_id=user_id,
+                    points=points_earned,
+                    description=description,
+                    activity_id=activity.id
+                )
+                db.session.add(transaction)
         
         if completed:
             activity.status = 'completed'
@@ -655,13 +702,15 @@ def api_progress():
             'points_earned': points_earned,
             'streak_bonus': streak_bonus,
             'current_progress': current_progress,
-            'activity_status': activity.status
+            'activity_status': activity.status,
+            'is_update': existing_progress is not None
         })
         
     except Exception as e:
+        db.session.rollback()
         print(f"Erro ao registrar progresso: {str(e)}")
         return jsonify({'message': f'Erro ao registrar progresso: {str(e)}'}), 500
-
+    
 @app.route('/api/progress/recent')
 def api_recent_progress():
     user_id = get_current_user_id()
